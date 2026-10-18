@@ -42,7 +42,12 @@ def cmd_download(args) -> None:
         found = {int(k): v for k, v in json.loads(IDS.read_text(encoding="utf-8")).items()}
         print(f"Using {len(found)} ids from {IDS} (pass --refresh to search again)")
     else:
-        found = search_ids(client, date_from=args.date_from, date_to=args.date_to)
+        found = search_ids(
+            client,
+            date_from=args.date_from,
+            date_to=args.date_to,
+            state_path=RAW / "_search_state.json",
+        )
         IDS.write_text(json.dumps(found, ensure_ascii=False, indent=1), encoding="utf-8")
     n = fetch_judgments(client, sorted(found, reverse=True), RAW, limit=args.limit)
     total = len(list(RAW.glob("[0-9]*.json")))

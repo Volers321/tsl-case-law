@@ -52,18 +52,32 @@ class SaosClient:
         session: requests.Session | None = None,
         *,
         delay: float = 0.3,
-        retries: int = 4,
+        retries: int = 5,
+        timeout: float = 120,
         sleep: Callable[[float], None] = time.sleep,
+        log: Callable[[str], None] = print,
     ):
         self.session = session or requests.Session()
         self.session.headers.setdefault("User-Agent", USER_AGENT)
-        self.delay, self.retries, self._sleep = delay, retries, sleep
+        self.delay, self.retries, self.timeout = delay, retries, timeout
+        self._sleep, self._log = sleep, log
 
     def _get(self, url: str, params: dict | None = None) -> dict:
+        """GET with retries on timeouts, dropped connections and 429/5xx (SAOS is slow
+        and occasionally overloaded). Backs off 2, 4, 8, 16, 32 s."""
         for attempt in range(self.retries + 1):
-            resp = self.session.get(url, params=params, timeout=60)
-            if resp.status_code in (429, 500, 502, 503, 504) and attempt < self.retries:
-                self._sleep(2**attempt)  # back off: 1, 2, 4, 8 s
+            last = attempt == self.retries
+            try:
+                resp = self.session.get(url, params=params, timeout=self.timeout)
+            except (requests.Timeout, requests.ConnectionError) as e:
+                if last:
+                    raise
+                self._log(f"  … {type(e).__name__}, retrying in {2 ** (attempt + 1)} s")
+                self._sleep(2 ** (attempt + 1))
+                continue
+            if resp.status_code in (429, 500, 502, 503, 504) and not last:
+                self._log(f"  … HTTP {resp.status_code}, retrying in {2 ** (attempt + 1)} s")
+                self._sleep(2 ** (attempt + 1))
                 continue
             resp.raise_for_status()
             self._sleep(self.delay)  # be polite to a free public service
@@ -77,10 +91,13 @@ class SaosClient:
         date_from: str | None = None,
         date_to: str | None = None,
         court_types: Iterable[str] = ("COMMON", "SUPREME"),
-        page_size: int = 100,
-        max_pages: int = 50,
+        page_size: int = 50,
+        max_pages: int = 100,
     ) -> Iterator[dict]:
-        """Yield search hits page by page until a page comes back empty."""
+        """Yield search hits page by page until a page comes back short or empty.
+
+        Uses the default (database-id) ordering: sorting by date made SAOS time out.
+        """
         for court_type in court_types:
             for page in range(max_pages):
                 params = {
@@ -89,8 +106,6 @@ class SaosClient:
                     "judgmentTypes": list(JUDGMENT_TYPES),
                     "pageSize": page_size,
                     "pageNumber": page,
-                    "sortingField": "JUDGMENT_DATE",
-                    "sortingDirection": "DESC",
                 }
                 if date_from:
                     params["judgmentDateFrom"] = date_from
@@ -116,21 +131,56 @@ def _items(payload: dict) -> list[dict]:
     return []
 
 
+def year_ranges(date_from: str, date_to: str | None = None) -> list[tuple[str, str]]:
+    """Split [date_from, date_to] into calendar years — smaller, faster SAOS queries."""
+    start = int(date_from[:4])
+    end_date = date_to or time.strftime("%Y-%m-%d")
+    end = int(end_date[:4])
+    ranges = []
+    for year in range(start, end + 1):
+        lo = date_from if year == start else f"{year}-01-01"
+        hi = end_date if year == end else f"{year}-12-31"
+        ranges.append((lo, hi))
+    return ranges
+
+
 def search_ids(
     client: SaosClient,
     queries: Iterable[Query] = TSL_QUERIES,
     *,
-    date_from: str | None = None,
+    date_from: str = "2015-01-01",
     date_to: str | None = None,
+    state_path: str | Path | None = None,
     progress: Callable[[str], None] = print,
 ) -> dict[int, list[str]]:
-    """Return {judgment_id: [names of queries that found it]}."""
-    found: dict[int, list[str]] = {}
+    """Return {judgment_id: [names of queries that found it]}.
+
+    Work is split into (query, year) chunks. With ``state_path`` the result is saved after
+    every chunk and finished chunks are skipped on the next run, so an interrupted search
+    resumes where it stopped instead of starting over.
+    """
+    state = {"done": [], "found": {}}
+    if state_path and Path(state_path).exists():
+        state = json.loads(Path(state_path).read_text(encoding="utf-8"))
+    found = {int(k): v for k, v in state["found"].items()}
+    done = set(state["done"])
     for q in queries:
         n_before = len(found)
-        for hit in client.search(q, date_from=date_from, date_to=date_to):
-            found.setdefault(int(hit["id"]), []).append(q.name)
-        progress(f"{q.name:25s} +{len(found) - n_before} new ids (total {len(found)})")
+        for lo, hi in year_ranges(date_from, date_to):
+            key = f"{q.name}|{lo}|{hi}"
+            if key in done:
+                continue
+            for hit in client.search(q, date_from=lo, date_to=hi):
+                names = found.setdefault(int(hit["id"]), [])
+                if q.name not in names:
+                    names.append(q.name)
+            done.add(key)
+            if state_path:
+                tmp = Path(str(state_path) + ".part")
+                tmp.write_text(json.dumps({"done": sorted(done), "found": found}), encoding="utf-8")
+                tmp.rename(state_path)
+            progress(f"{q.name:25s} {lo[:4]}  total ids: {len(found)}")
+        progress(f"{q.name:25s} done: +{len(found) - n_before} new ids")
     return found
 
 
@@ -148,11 +198,17 @@ def fetch_judgments(
     todo = [i for i in ids if not (out_dir / f"{i}.json").exists()]
     if limit is not None:
         todo = todo[:limit]
+    skipped = 0
     for n, judgment_id in enumerate(todo, start=1):
-        data = client.judgment(judgment_id)
+        try:
+            data = client.judgment(judgment_id)
+        except requests.HTTPError as e:  # e.g. a judgment withdrawn from SAOS (404)
+            skipped += 1
+            progress(f"  skip {judgment_id}: {e}")
+            continue
         tmp = out_dir / f"{judgment_id}.json.part"
         tmp.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
         tmp.rename(out_dir / f"{judgment_id}.json")  # atomic: no half-written files
         if n % 25 == 0 or n == len(todo):
             progress(f"downloaded {n}/{len(todo)}")
-    return len(todo)
+    return len(todo) - skipped
