@@ -78,3 +78,52 @@ def test_build_and_stats_end_to_end(tmp_path, monkeypatch, first_instance, appea
     cli.main(["stats"])
     out = capsys.readouterr().out
     assert "dropped     1: low TSL score" in out and "APPEAL_DISMISSED" in out
+
+
+def test_check_labels_compares_rules_and_llm(tmp_path, monkeypatch, capsys):
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "data/labels").mkdir(parents=True)
+    cases = make_cases((2, 1, 0))  # ids 1,2 GRANTED; 3 DISMISSED
+    (tmp_path / "data/cases.jsonl").write_text("".join(json.dumps(c) + "\n" for c in cases))
+    export_for_labeling(cases, tmp_path / "data/labels/sample.csv")
+    sheet = tmp_path / "data/labels/sample.csv"
+    header = sheet.read_text(encoding="utf-8-sig").splitlines()[0].split(";")
+    rows = [  # expert: case 2 is really PARTIAL, case 3 not TSL
+        {"id": "1", "is_tsl": "tak", "dispute_type": "zaplata_frachtu", "outcome_rule_ok": "tak"},
+        {
+            "id": "2",
+            "is_tsl": "tak",
+            "dispute_type": "szkoda_w_ladunku",
+            "outcome_rule_ok": "nie",
+            "outcome_gold": "partial",
+        },
+        {"id": "3", "is_tsl": "nie"},
+    ]
+    blank = dict.fromkeys(header, "")
+    lines = [";".join(header)] + [";".join((blank | r)[h] for h in header) for r in rows]
+    sheet.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    llm_rows = [
+        {
+            "id": 1,
+            "facts_llm": {"is_tsl": True, "dispute_type": "zaplata_frachtu"},
+            "outcome_llm": {"outcome": "GRANTED"},
+        },
+        {
+            "id": 2,
+            "facts_llm": {"is_tsl": True, "dispute_type": "inne"},
+            "outcome_llm": {"outcome": "PARTIAL"},
+        },
+        {
+            "id": 3,
+            "facts_llm": {"is_tsl": True, "dispute_type": "inne"},
+            "outcome_llm": {"outcome": "DISMISSED"},
+        },
+    ]
+    (tmp_path / "data/extracted.jsonl").write_text("".join(json.dumps(r) + "\n" for r in llm_rows))
+    cli.main(["check-labels"])
+    out = capsys.readouterr().out
+    assert "relevant to TSL: 2 (67%)" in out
+    assert "rules: 1/2 (50%)" in out and "LLM:   2/2 (100%)" in out
+    assert "LLM relevance (is_tsl) agreement: 2/3 (67%)" in out
+    assert "LLM dispute type agreement:       1/2 (50%)" in out
+    assert "✗ I C 2/24: rule=GRANTED gold=PARTIAL llm=PARTIAL" in out

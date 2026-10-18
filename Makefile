@@ -1,7 +1,7 @@
 .PHONY: install test lint data
 
 install:
-	pip install -e ".[dev]"
+	pip install -e ".[dev,llm]"
 
 test:
 	pytest -q

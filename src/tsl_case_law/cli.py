@@ -6,6 +6,7 @@ Typical flow:
     tsl stats                          # what we've got
     tsl sample -n 50                   # CSV for the expert to label
     tsl check-labels                   # how good are the rules vs. the expert?
+    tsl extract --ids-from-labels      # LLM features for the labelled cases (needs API key)
 """
 
 from __future__ import annotations
@@ -23,6 +24,7 @@ RAW = Path("data/raw")
 CASES = Path("data/cases.jsonl")
 IDS = RAW / "_ids.json"
 LABEL_SHEET = Path("data/labels/sample.csv")
+EXTRACTED = Path("data/extracted.jsonl")
 
 
 def load_cases(path: Path = CASES) -> list[dict]:
@@ -93,26 +95,84 @@ def cmd_sample(args) -> None:
     print("Open it in Numbers/Excel, fill the last 5 columns, save as CSV (same name).")
 
 
+YES = {"tak", "t", "yes", "y", "1", "true"}
+
+
+def _gold_outcome(label: dict, case: dict) -> str | None:
+    """Expert's outcome: the rule's label if they confirmed it, else what they wrote."""
+    if label["outcome_rule_ok"].lower() in YES:
+        return case.get("outcome_rule")
+    return label["outcome_gold"].upper() or None
+
+
+def _acc(pairs: list[tuple]) -> str:
+    ok = sum(a == b for a, b in pairs)
+    return f"{ok}/{len(pairs)} ({ok / len(pairs):.0%})" if pairs else "—"
+
+
 def cmd_check_labels(args) -> None:
     labels = read_labels(LABEL_SHEET)
     if not labels:
         raise SystemExit(f"No labelled rows in {LABEL_SHEET} yet.")
     cases = {c["id"]: c for c in load_cases()}
-    yes = {"tak", "t", "yes", "y", "1", "true"}
-    tsl = [i for i, lab in labels.items() if lab["is_tsl"].lower() in yes]
+    llm = {}
+    if EXTRACTED.exists():
+        for line in EXTRACTED.read_text(encoding="utf-8").splitlines():
+            r = json.loads(line)
+            llm[r["id"]] = r
+
+    tsl = [i for i, lab in labels.items() if lab["is_tsl"].lower() in YES]
     print(f"labelled: {len(labels)}   relevant to TSL: {len(tsl)} ({len(tsl) / len(labels):.0%})")
-    judged = [i for i in tsl if labels[i]["outcome_rule_ok"]]
-    ok = [i for i in judged if labels[i]["outcome_rule_ok"].lower() in yes]
-    if judged:
-        print(f"rule-based outcome correct: {len(ok)}/{len(judged)} ({len(ok) / len(judged):.0%})")
-    wrong = [i for i in judged if i not in ok]
+    print("  -> precision of the keyword relevance filter (`tsl build --min-score`)")
+
+    gold = {i: _gold_outcome(labels[i], cases.get(i, {})) for i in tsl}
+    gold = {i: g for i, g in gold.items() if g}
+    print("\noutcome accuracy vs expert:")
+    print(
+        f"  rules: {_acc([(cases[i]['outcome_rule'], g) for i, g in gold.items() if i in cases])}"
+    )
+    if llm:
+        pairs = [(llm[i]["outcome_llm"].get("outcome"), g) for i, g in gold.items() if i in llm]
+        print(f"  LLM:   {_acc(pairs)}")
+        rel = [(llm[i]["facts_llm"].get("is_tsl", False), i in tsl) for i in labels if i in llm]
+        print(f"\nLLM relevance (is_tsl) agreement: {_acc(rel)}")
+        typed = [
+            (llm[i]["facts_llm"].get("dispute_type"), labels[i]["dispute_type"])
+            for i in tsl
+            if i in llm and labels[i]["dispute_type"]
+        ]
+        print(f"LLM dispute type agreement:       {_acc(typed)}")
+
+    wrong = [i for i, g in gold.items() if i in cases and cases[i]["outcome_rule"] != g]
+    if wrong:
+        print("\nrule errors:")
     for i in wrong:
-        c = cases.get(i, {})
+        c = cases[i]
         print(
-            f"  ✗ {c.get('case_number', i)}: rule={c.get('outcome_rule')} gold={labels[i]['outcome_gold']}"
+            f"  ✗ {c['case_number']}: rule={c['outcome_rule']} gold={gold[i]}"
+            + (f" llm={llm[i]['outcome_llm'].get('outcome')}" if i in llm else "")
         )
     types = Counter(labels[i]["dispute_type"] or "—" for i in tsl)
-    print("dispute types: " + ", ".join(f"{t}:{n}" for t, n in types.most_common()))
+    print("\ndispute types: " + ", ".join(f"{t}:{n}" for t, n in types.most_common()))
+
+
+def cmd_extract(args) -> None:
+    from .extract import PROMPT_VERSION, extract_all
+    from .llm import LLM
+
+    cases = load_cases()
+    if args.ids_from_labels:
+        wanted = set(read_labels(LABEL_SHEET))
+        cases = [c for c in cases if c["id"] in wanted]
+    cases = cases[: args.limit] if args.limit else cases
+    llm = LLM.from_env()
+    print(
+        f"Extracting {len(cases)} cases with {llm.provider}/{llm.model} (prompt {PROMPT_VERSION})"
+    )
+    rows = extract_all(llm, cases)
+    EXTRACTED.write_text("".join(json.dumps(r, ensure_ascii=False) + "\n" for r in rows), "utf-8")
+    failed = sum(not (r["facts_llm"]["ok"] and r["outcome_llm"]["ok"]) for r in rows)
+    print(f"Wrote {len(rows)} rows to {EXTRACTED}; {failed} with unparseable answers")
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -144,6 +204,11 @@ def main(argv: list[str] | None = None) -> None:
     sub.add_parser("check-labels", help="compare rules with expert labels").set_defaults(
         func=cmd_check_labels
     )
+
+    e = sub.add_parser("extract", help="LLM: party roles, dispute type, claim, defences, outcome")
+    e.add_argument("--limit", type=int, help="only the first N cases (cost control)")
+    e.add_argument("--ids-from-labels", action="store_true", help="only cases in the label sheet")
+    e.set_defaults(func=cmd_extract)
 
     args = p.parse_args(argv)
     args.func(args)

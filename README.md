@@ -37,8 +37,9 @@ SAOS API ──► download ──► build ────────────
 - [x] SAOS client: topical searches (statutes cited: Prawo przewozowe, CMR Convention; TSL vocabulary), full-judgment download, resumable, polite rate limiting
 - [x] Processing: HTML cleanup, TSL relevance score, section split, rule-based outcome labels (cost orders ignored), amounts
 - [x] Expert-labelling workflow: stratified sample → spreadsheet → `tsl check-labels`
-- [ ] Expert labels for 50 cases + accuracy of rules and relevance filter
-- [ ] LLM extraction of structured facts (party roles, dispute type, claim, defence)
+- [x] LLM extraction (prompt-versioned cache): party roles, dispute type, claim, defences, neutral summary — from facts only; outcome from the sentencja only
+- [x] `tsl check-labels` scores relevance filter, outcome rules and LLM extraction against the expert
+- [ ] Expert labels for 50 cases
 - [ ] Similar-case retrieval and outcome prediction baselines
 - [ ] Evaluation on held-out judgments; MCP server
 
@@ -53,6 +54,9 @@ tsl build                           # -> data/cases.jsonl
 tsl stats
 tsl sample -n 50                    # -> data/labels/sample.csv for expert review
 tsl check-labels                    # rules vs. expert, after filling the sheet
+cp .env.example .env                # add ANTHROPIC_API_KEY
+tsl extract --ids-from-labels       # LLM features for the labelled cases
+tsl check-labels                    # now also LLM vs. expert
 ```
 
 ## Data
