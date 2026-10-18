@@ -18,7 +18,7 @@ from collections import Counter
 from pathlib import Path
 
 from .labeling import export_for_labeling, read_labels, stratified_sample
-from .processing import to_record
+from .processing import CIVIL_REGISTERS, to_record
 
 RAW = Path("data/raw")
 CASES = Path("data/cases.jsonl")
@@ -61,10 +61,18 @@ def cmd_build(args) -> None:
     kept, dropped = [], Counter()
     for f in files:
         rec = to_record(json.loads(f.read_text(encoding="utf-8")))
-        if rec.tsl_score < args.min_score:
+        if rec.repertorium and rec.repertorium not in CIVIL_REGISTERS:
+            dropped[f"not a civil case ({rec.repertorium})"] += 1
+        elif not rec.repertorium and rec.facts.lower().count("oskarżon") >= 3:
+            dropped["not a civil case (criminal wording)"] += 1
+        elif rec.tsl_score < args.min_score:
             dropped["low TSL score"] += 1
         elif not rec.facts:
             dropped["no reasons / facts section"] += 1
+        elif not rec.assessment:
+            # Without a found start of the court's assessment the "facts" are the whole
+            # reasons, outcome included — unusable as prediction input.
+            dropped["no assessment cut (leakage risk)"] += 1
         else:
             kept.append(rec.to_dict())
     kept.sort(key=lambda r: r["date"])
@@ -72,14 +80,21 @@ def cmd_build(args) -> None:
         "".join(json.dumps(r, ensure_ascii=False) + "\n" for r in kept), encoding="utf-8"
     )
     print(f"Kept {len(kept)} of {len(files)} judgments -> {CASES}")
+    other = Counter()
     for reason, n in dropped.most_common():
-        print(f"  dropped {n:5d}: {reason}")
+        if reason.startswith("not a civil case (") and n < 10:
+            other[reason] += n  # keep the summary short: rare registers in one line
+        else:
+            print(f"  dropped {n:5d}: {reason}")
+    if other:
+        regs = ", ".join(r[18:-1] for r in other)
+        print(f"  dropped {sum(other.values()):5d}: not a civil case (other: {regs})")
 
 
 def cmd_stats(args) -> None:
     cases = load_cases()
     print(f"cases: {len(cases)}   dates: {cases[0]['date']} … {cases[-1]['date']}")
-    for key in ("court_type", "instance", "outcome_rule"):
+    for key in ("court_type", "instance", "outcome_rule", "outcome_source"):
         counts = Counter(c[key] for c in cases)
         print(f"\n{key}:")
         for value, n in counts.most_common():
@@ -119,8 +134,19 @@ def cmd_inspect(args) -> None:
 
     print(f"\nUNKNOWN with a sentencja — first {args.n}:")
     unknown = [c for c in cases if c["outcome_rule"] == "UNKNOWN" and c["sentencja"].strip()]
-    for c in unknown[: args.n]:
-        print(f"  [{c['id']}] {_snip(c['sentencja'], 300)}")
+    for c in unknown[: args.n]:  # the end of the sentencja holds the operative points
+        print(f"  [{c['id']}] {c['case_number']}: {_snip(c['sentencja'], 350, tail=True)}")
+
+    print(
+        "\nrepertorium: "
+        + ", ".join(
+            f"{r or '—'}:{n}" for r, n in Counter(c["repertorium"] for c in cases).most_common()
+        )
+    )
+    print(f"\noutcome from reasons — first {min(args.n, 5)} (check these are right):")
+    from_reasons = [c for c in cases if c["outcome_source"] == "reasons"]
+    for c in from_reasons[: min(args.n, 5)]:
+        print(f"  [{c['id']}] {c['outcome_rule']}: {_snip(c['assessment'], 250, tail=True)}")
 
     print(f"\nstart of text when sentencja is empty — first {min(args.n, 4)}:")
     for c in empty_sent[: min(args.n, 4)]:

@@ -3,13 +3,15 @@ import pytest
 from tsl_case_law.processing import (
     first_amount,
     html_to_text,
+    reasons_outcome,
+    repertorium,
     rule_outcome,
     split_sections,
     to_record,
     tsl_score,
 )
 
-from .conftest import FIRST_INSTANCE_HTML
+from .conftest import FIRST_INSTANCE_HTML, saos_judgment
 
 
 def test_html_to_text_keeps_paragraphs():
@@ -104,3 +106,76 @@ def test_to_record_tolerates_missing_fields():
         }
     )
     assert rec.court == "Sąd Najwyższy" and rec.keywords == ["przewóz"] and rec.facts == ""
+
+
+@pytest.mark.parametrize(
+    "number,expected",
+    [
+        ("V GC 388/14", "GC"),
+        ("III Ca 1264/14", "Ca"),
+        ("I ACa 1/15", "ACa"),
+        ("XVII AmC 2990/14", "AmC"),
+        ("VIII U 4988/13", "U"),
+        ("V CNP 27/14", "CNP"),
+        ("", ""),
+    ],
+)
+def test_repertorium(number, expected):
+    assert repertorium(number) == expected
+
+
+@pytest.mark.parametrize(
+    "sentencja,appeal,expected",
+    [
+        ("I. utrzymuje w całości w mocy nakaz zapłaty z dnia 3 marca 2014 r.", None, "GRANTED"),
+        ("1. z a s ą d z a od pozwanego kwotę 100 zł", None, "GRANTED"),
+        ("1. o d d a l a powództwo; 2. zasądza od powoda koszty procesu", None, "DISMISSED"),
+        ("odrzuca apelację", None, "APPEAL_DISMISSED"),
+        # Register says appeal although the sentencja never says "apelacja"
+        ("zmienia zaskarżony wyrok w ten sposób, że zasądza kwotę 900 zł", True, "CHANGED"),
+    ],
+)
+def test_rule_outcome_real_data_patterns(sentencja, appeal, expected):
+    assert rule_outcome(sentencja, appeal=appeal)[1] == expected
+
+
+@pytest.mark.parametrize(
+    "assessment,appeal,expected",
+    [
+        (
+            "Apelacja nie zasługiwała na uwzględnienie. Dlatego ją oddalono.",
+            True,
+            "APPEAL_DISMISSED",
+        ),
+        ("Z tych względów Sąd Okręgowy zmienił zaskarżony wyrok.", True, "CHANGED"),
+        ("Mając powyższe na uwadze, powództwo należało oddalić.", False, "DISMISSED"),
+        ("Powództwo nie zasługiwało na uwzględnienie.", False, "DISMISSED"),
+        ("Powództwo zasługiwało na uwzględnienie w całości.", False, "GRANTED"),
+        ("Zasądzono 500 zł, a w pozostałym zakresie powództwo oddalono.", False, "PARTIAL"),
+        ("O kosztach orzeczono na podstawie art. 98 k.p.c.", False, "UNKNOWN"),
+    ],
+)
+def test_reasons_outcome(assessment, appeal, expected):
+    assert reasons_outcome(assessment, appeal) == expected
+
+
+def test_reasons_only_document_gets_outcome_from_reasons():
+    html = (
+        "<p>Sygn. akt III Ca 1264/14</p><p>UZASADNIENIE</p>"
+        "<p>Sąd Rejonowy zasądził od pozwanego przewoźnika fracht.</p>"
+        "<p>Apelacja pozwanego nie zasługiwała na uwzględnienie i podlegała oddaleniu.</p>"
+    )
+    rec = to_record(
+        saos_judgment(html, judgmentType="REASONS", courtCases=[{"caseNumber": "III Ca 1264/14"}])
+    )
+    assert (rec.repertorium, rec.instance) == ("Ca", "appeal")
+    assert (rec.outcome_rule, rec.outcome_source) == ("APPEAL_DISMISSED", "reasons")
+    assert "nie zasługiwała" not in rec.facts
+
+
+def test_new_assessment_markers_cut_facts():
+    sec = split_sections(
+        "WYROK\noddala powództwo\nUZASADNIENIE\nPowód żądał frachtu.\n"
+        "Powództwo nie zasługiwało na uwzględnienie, bo roszczenie się przedawniło."
+    )
+    assert sec.facts == "Powód żądał frachtu."

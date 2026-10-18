@@ -54,6 +54,21 @@ def tsl_score(text: str) -> float:
     return sum(w * min(len(rx.findall(text)), 5) for rx, w in _TSL_RE)
 
 
+# The court register ("repertorium") in the case number tells the kind of case:
+# "V GC 388/14" is commercial first instance, "I ACa 12/15" a civil appeal. TSL vocabulary
+# also appears in criminal (K, Ka), labour (P, Pa), social-insurance (U) and consumer-clause
+# (AmC) cases, which are not contract disputes — only civil/commercial registers are kept.
+CIVIL_FIRST = {"C", "GC", "Nc", "GNc", "Co", "GCo"}
+CIVIL_APPEAL = {"Ca", "Ga", "Cz", "Gz", "ACa", "AGa", "ACz", "AGz", "CSK", "CSKP", "CZ", "CNP"}
+CIVIL_REGISTERS = CIVIL_FIRST | CIVIL_APPEAL
+_REPERTORIUM = re.compile(r"^\s*(?:[IVXL]+\s+)?([A-Za-z]+)\s*\d+\s*/\s*\d+")
+
+
+def repertorium(case_number: str) -> str:
+    m = _REPERTORIUM.match(case_number or "")
+    return m.group(1) if m else ""
+
+
 # ------------------------------------------------------------------------- sections
 
 _REASONS_HEADER = re.compile(r"^\s*U\s*Z\s*A\s*S\s*A\s*D\s*N\s*I\s*E\s*N\s*I\s*E\s*$", re.M | re.I)
@@ -62,8 +77,11 @@ _REASONS_HEADER = re.compile(r"^\s*U\s*Z\s*A\s*S\s*A\s*D\s*N\s*I\s*E\s*N\s*I\s*E
 _ASSESSMENT = re.compile(
     r"(Sąd\s+(?:\w+\s+){0,3}zważył|Sąd\s+(?:\w+\s+){0,3}(?:uznał|stwierdził),?\s+co\s+następuje"
     r"|Sąd\s+(?:\w+\s+){0,3}ocenił|Rozważania\s+prawne|W\s+tak\s+ustalonym\s+stanie\s+faktycznym"
-    r"|Apelacja\s+(?:\w+\s+){0,2}(?:jest|okazała\s+się|zasługuje|nie\s+zasługuje)"
-    r"|Skarga\s+kasacyjna\s+(?:\w+\s+){0,2}(?:jest|okazała\s+się|zasługuje|nie\s+zasługuje))",
+    r"|(?:Apelacja|Skarga\s+kasacyjna|Zażalenie|Powództwo)\s+(?:\w+\s+){0,3}"
+    r"(?:jest|okazał[ao]?\s+się|zasługuj\w+|nie\s+zasługiwał\w*|podlega\w*)"
+    # Cutting earlier is always safe (less input, no leakage), so these fallbacks are broad:
+    r"|Przechodząc\s+do\s+(?:oceny|rozważań)|Powyższy\s+stan\s+faktyczny|Ustalony\s+stan\s+faktyczny"
+    r"|Mając\s+(?:powyższe|to)\s+na\s+(?:uwadze|względzie))",
     re.IGNORECASE,
 )
 
@@ -115,33 +133,85 @@ def _drop_cost_orders(s: str) -> str:
     return " ; ".join(kept)
 
 
-def rule_outcome(sentencja: str) -> tuple[str, str]:
+def rule_outcome(sentencja: str, appeal: bool | None = None) -> tuple[str, str]:
     """Return (instance, outcome) inferred from the operative part.
 
     instance is "appeal" when the court decides on an appeal or cassation, else "first".
+    Pass ``appeal`` when it is known from the case register; otherwise it is guessed from
+    the wording.
     The rules are deliberately simple; their accuracy is measured against human labels.
     """
-    s = _drop_cost_orders(" ".join(sentencja.split()))
-    appeal = _has(r"apelacj|skarg\w* kasacyjn|zażaleni", s)
+    s = _drop_cost_orders(_unspace(" ".join(sentencja.split())))
+    if appeal is None:
+        appeal = _has(r"apelacj|skarg\w* kasacyjn|zażaleni", s)
     if appeal:
         if _has(r"\bzmienia\b", s):
             return "appeal", "CHANGED"
         if _has(r"\buchyla\b", s):
             return "appeal", "SET_ASIDE"
-        if _has(r"\boddala\b", s):
+        # "odrzuca apelację" is procedural, but for the parties it means the same: the
+        # appealed judgment stands.
+        if _has(r"\b(oddala|odrzuca)\b", s):
             return "appeal", "APPEAL_DISMISSED"
         return "appeal", UNKNOWN
-    if _has(r"\bumarza\b", s) and not _has(r"\bzasądza\b", s):
+    # Many commercial cases start with a payment order (nakaz zapłaty); after the defendant
+    # objects, the court either upholds it (claimant wins) or sets it aside.
+    upheld = _has(r"utrzymuje\s+(?:\w+\s+){0,3}w\s+mocy\s+(?:\w+\s+){0,2}nakaz", s)
+    rest_dismissed = _has(
+        r"(w\s+pozostał\w+\s+(zakresie|części)\s+(powództwo\s+)?oddala|oddala\s+powództwo\s+w\s+pozostał)",
+        s,
+    )
+    if _has(r"\bumarza\b", s) and not _has(r"\bzasądza\b", s) and not upheld:
         return "first", "DISCONTINUED"
-    if _has(r"\bzasądza\b", s):
-        partial = _has(
-            r"(w\s+pozostał\w+\s+(zakresie|części)\s+(powództwo\s+)?oddala|oddala\s+powództwo\s+w\s+pozostał)",
-            s,
-        )
+    if _has(r"\bzasądza\b", s) or upheld:
+        partial = rest_dismissed or _has(r"utrzymuje\s+\w*\s*w\s+mocy[^;]{0,80}w\s+części", s)
         return "first", "PARTIAL" if partial else "GRANTED"
-    if _has(r"\boddala\s+powództwo\b", s):
+    if _has(r"\boddala\s+powództwo\b|\bpowództwo\s+oddala\b", s):
         return "first", "DISMISSED"
     return "first", UNKNOWN
+
+
+_SPACED = re.compile(r"\b(?:[^\W\d_] ){3,}[^\W\d_]\b")
+
+
+def _unspace(s: str) -> str:
+    """Join letter-spaced words: "z a s ą d z a" -> "zasądza" (common in sentencje)."""
+    return _SPACED.sub(lambda m: m.group(0).replace(" ", ""), s)
+
+
+# The court's conclusion is near the end of the reasons, e.g. "apelacja podlegała oddaleniu"
+# or "powództwo należało oddalić". Used only when the sentencja is missing (REASONS-only
+# documents in SAOS) — less reliable than the sentencja, so records keep the source.
+_NOT = r"(?<!nie )"
+
+
+def reasons_outcome(assessment: str, appeal: bool) -> str:
+    tail = _unspace(" ".join(assessment.split()))[-2000:]
+    if appeal:
+        if _has(r"zmieni\w*\s+(?:\w+\s+){0,2}(?:zaskarżon\w+\s+)?(?:wyrok|orzeczeni)", tail):
+            return "CHANGED"
+        if _has(r"uchyl\w*\s+(?:\w+\s+){0,2}(?:zaskarżon\w+\s+)?(?:wyrok|orzeczeni)", tail):
+            return "SET_ASIDE"
+        if _has(
+            r"(apelacj|zażaleni|skarg)\w*[^.]{0,120}(oddal|odrzuc|bezzasadn|niezasadn|nie\s+zasługiw)"
+            r"|(oddal|odrzuc)\w*\s+(?:\w+\s+){0,2}(apelacj|zażaleni|skarg)",
+            tail,
+        ):
+            return "APPEAL_DISMISSED"
+        return UNKNOWN
+    if _has(r"umorzy\w*\s+postępowani|umorzeni\w*\s+postępowani", tail):
+        return "DISCONTINUED"
+    if _has(r"w\s+pozostał\w+\s+(?:zakresie|części)[^.]{0,80}oddal|częściowo\s+zasadn", tail):
+        return "PARTIAL"
+    if _has(r"powództw\w*[^.]{0,100}(oddal|bezzasadn|niezasadn|nie\s+zasługiw)", tail):
+        return "DISMISSED"
+    if _has(
+        _NOT + r"zasługiwał\w*\s+na\s+uwzględnienie|powództw\w*[^.]{0,80}" + _NOT + r"zasadn"
+        r"|utrzyma\w*\s+(?:\w+\s+){0,3}w\s+mocy\s+(?:\w+\s+){0,2}nakaz",
+        tail,
+    ):
+        return "GRANTED"
+    return UNKNOWN
 
 
 _AMOUNT = re.compile(r"kwot[ęy]\s+([\d\s.]+(?:,\d{2})?)\s*(zł|złotych|euro|EUR)", re.IGNORECASE)
@@ -171,8 +241,10 @@ class CaseRecord:
     court_type: str
     judgment_type: str
     date: str
+    repertorium: str
     instance: str
     outcome_rule: str
+    outcome_source: str  # "sentencja", "reasons" or "" when unknown
     amount: float | None
     currency: str | None
     tsl_score: float
@@ -197,20 +269,29 @@ def _court_name(j: dict) -> str:
 def to_record(j: dict) -> CaseRecord:
     text = html_to_text(j.get("textContent"))
     sec = split_sections(text)
-    instance, outcome = rule_outcome(sec.sentencja)
+    case_number = ", ".join(c.get("caseNumber", "") for c in j.get("courtCases") or [])
+    rep = repertorium(case_number)
+    # The register is more reliable than words in the sentencja.
+    instance, outcome = rule_outcome(sec.sentencja, appeal=(rep in CIVIL_APPEAL) if rep else None)
+    source = "sentencja" if outcome != UNKNOWN else ""
+    if outcome == UNKNOWN and sec.assessment:
+        outcome = reasons_outcome(sec.assessment, appeal=instance == "appeal")
+        source = "reasons" if outcome != UNKNOWN else ""
     amount = first_amount(sec.sentencja)
     keywords = j.get("keywords") or []
     if isinstance(keywords, dict):  # the API documents "list or dictionary"
         keywords = list(keywords.values())
     return CaseRecord(
         id=int(j["id"]),
-        case_number=", ".join(c.get("caseNumber", "") for c in j.get("courtCases") or []),
+        case_number=case_number,
         court=_court_name(j),
         court_type=j.get("courtType", ""),
         judgment_type=j.get("judgmentType", ""),
         date=j.get("judgmentDate", ""),
+        repertorium=rep,
         instance=instance,
         outcome_rule=outcome,
+        outcome_source=source,
         amount=amount[0] if amount else None,
         currency=amount[1] if amount else None,
         tsl_score=tsl_score(text),

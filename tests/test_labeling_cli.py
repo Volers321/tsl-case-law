@@ -70,7 +70,8 @@ def test_build_and_stats_end_to_end(tmp_path, monkeypatch, first_instance, appea
         id=303,
         textContent="<p>oddala powództwo</p><p>UZASADNIENIE</p><p>najem lokalu</p>",
     )
-    for j in (first_instance, appeal, unrelated):
+    criminal = dict(first_instance, id=404, courtCases=[{"caseNumber": "II K 7/15"}])
+    for j in (first_instance, appeal, unrelated, criminal):
         (raw / f"{j['id']}.json").write_text(json.dumps(j, ensure_ascii=False), encoding="utf-8")
     cli.main(["build", "--min-score", "4"])
     cases = cli.load_cases()
@@ -78,6 +79,7 @@ def test_build_and_stats_end_to_end(tmp_path, monkeypatch, first_instance, appea
     cli.main(["stats"])
     out = capsys.readouterr().out
     assert "dropped     1: low TSL score" in out and "APPEAL_DISMISSED" in out
+    assert "not a civil case (other: K)" in out
     cli.main(["inspect", "-n", "2"])
     out = capsys.readouterr().out
     assert "empty sentencja:" in out and "no assessment cut:" in out
