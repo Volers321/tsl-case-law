@@ -176,6 +176,9 @@ def cmd_extract(args) -> None:
 
 
 def main(argv: list[str] | None = None) -> None:
+    # Show progress immediately even when piped through `tee` (stdout is block-buffered then).
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(line_buffering=True)
     p = argparse.ArgumentParser(
         prog="tsl", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
