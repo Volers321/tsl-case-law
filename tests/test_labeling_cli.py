@@ -78,6 +78,9 @@ def test_build_and_stats_end_to_end(tmp_path, monkeypatch, first_instance, appea
     cli.main(["stats"])
     out = capsys.readouterr().out
     assert "dropped     1: low TSL score" in out and "APPEAL_DISMISSED" in out
+    cli.main(["inspect", "-n", "2"])
+    out = capsys.readouterr().out
+    assert "empty sentencja:" in out and "no assessment cut:" in out
 
 
 def test_check_labels_compares_rules_and_llm(tmp_path, monkeypatch, capsys):

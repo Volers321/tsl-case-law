@@ -90,6 +90,53 @@ def cmd_stats(args) -> None:
     print(f"facts length (words): median {facts_len[len(facts_len) // 2]}, max {facts_len[-1]}")
 
 
+def _snip(text: str, n: int, tail: bool = False) -> str:
+    flat = " ".join(text.split())
+    return ("…" + flat[-n:]) if tail and len(flat) > n else flat[:n]
+
+
+def cmd_inspect(args) -> None:
+    """Diagnostics for the processing rules on real data (compact, paste-able output)."""
+    cases = load_cases()
+    print(f"cases: {len(cases)}")
+
+    print("\noutcome_rule by judgment_type:")
+    by_type = Counter((c["judgment_type"], c["outcome_rule"]) for c in cases)
+    for (jt, out), n in sorted(by_type.items()):
+        print(f"  {jt or '—':10s} {out:18s} {n:5d}")
+
+    empty_sent = [c for c in cases if not c["sentencja"].strip()]
+    no_assess = [c for c in cases if not c["assessment"].strip()]
+    print(f"\nempty sentencja:   {len(empty_sent)}")
+    print(f"no assessment cut: {len(no_assess)}  (facts = whole reasons -> possible leakage)")
+
+    numbers = Counter(c["case_number"] for c in cases if c["case_number"])
+    dupes = {k: v for k, v in numbers.items() if v > 1}
+    print(f"case numbers on >1 record: {len(dupes)} (e.g. SENTENCE + REASONS of one case)")
+    for k in list(dupes)[:3]:
+        recs = [c for c in cases if c["case_number"] == k]
+        print(f"  {k}: " + ", ".join(f"{c['id']}/{c['judgment_type']}" for c in recs))
+
+    print(f"\nUNKNOWN with a sentencja — first {args.n}:")
+    unknown = [c for c in cases if c["outcome_rule"] == "UNKNOWN" and c["sentencja"].strip()]
+    for c in unknown[: args.n]:
+        print(f"  [{c['id']}] {_snip(c['sentencja'], 300)}")
+
+    print(f"\nstart of text when sentencja is empty — first {min(args.n, 4)}:")
+    for c in empty_sent[: min(args.n, 4)]:
+        print(f"  [{c['id']}] {_snip(c['facts'], 200)}")
+
+    print(f"\nend of facts when no assessment cut — first {args.n}:")
+    for c in no_assess[: args.n]:
+        print(f"  [{c['id']}] {_snip(c['facts'], 200, tail=True)}")
+
+    longest = sorted(cases, key=lambda c: -len(c["facts"].split()))[:3]
+    print("\nlongest facts (words) and the 150 chars before the assessment cut:")
+    for c in longest:
+        print(f"  [{c['id']}] {len(c['facts'].split())} w: {_snip(c['facts'], 150, tail=True)}")
+        print(f"      assessment starts: {_snip(c['assessment'], 100) or '—'}")
+
+
 def cmd_sample(args) -> None:
     cases = load_cases()
     if LABEL_SHEET.exists() and not args.force:
@@ -202,6 +249,10 @@ def main(argv: list[str] | None = None) -> None:
     b.set_defaults(func=cmd_build)
 
     sub.add_parser("stats", help="dataset statistics").set_defaults(func=cmd_stats)
+
+    i = sub.add_parser("inspect", help="check section split and outcome rules on real data")
+    i.add_argument("-n", type=int, default=8, help="examples per diagnostic")
+    i.set_defaults(func=cmd_inspect)
 
     s = sub.add_parser("sample", help="export a stratified sample for expert labelling")
     s.add_argument("-n", type=int, default=50)
