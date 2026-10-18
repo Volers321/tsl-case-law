@@ -35,6 +35,7 @@ def test_label_roundtrip_semicolon_and_comma(tmp_path):
     text = path.read_text(encoding="utf-8-sig")
     assert text.splitlines()[0].startswith("id;case_number")
     assert len(text.splitlines()[1]) < 3200, "excerpts must be truncated"
+    assert ";… zasądza" in text.splitlines()[1], "sentencja shown from its end (operative part)"
     # Expert fills row 1 and re-saves with commas (e.g. Numbers in an English locale)
     lines = text.splitlines()
     header = lines[0].split(";")

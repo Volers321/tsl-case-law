@@ -31,7 +31,9 @@ EXPORT_COLUMNS = (
     "date",
     "instance",
     "outcome_rule",
-    "sentencja",
+    "outcome_source",
+    "sentencja_end",
+    "conclusion",
     "facts_excerpt",
     *EXPERT_COLUMNS,
 )
@@ -40,6 +42,13 @@ EXPORT_COLUMNS = (
 def _excerpt(text: str, n: int) -> str:
     text = " ".join(text.split())
     return text if len(text) <= n else text[:n].rsplit(" ", 1)[0] + " …"
+
+
+def _tail(text: str, n: int) -> str:
+    """End of a text: the operative points come after the court header in a sentencja,
+    and the court's conclusion closes the reasons."""
+    text = " ".join(text.split())
+    return text if len(text) <= n else "… " + text[-n:].split(" ", 1)[-1]
 
 
 def stratified_sample(records: list[dict], n: int, *, seed: int = 13) -> list[dict]:
@@ -74,7 +83,9 @@ def export_for_labeling(records: list[dict], path: str | Path) -> int:
                     "date": r["date"],
                     "instance": r["instance"],
                     "outcome_rule": r["outcome_rule"],
-                    "sentencja": _excerpt(r["sentencja"], 1200),
+                    "outcome_source": r.get("outcome_source", ""),
+                    "sentencja_end": _tail(r["sentencja"], 900),
+                    "conclusion": _tail(r.get("assessment", ""), 700),
                     "facts_excerpt": _excerpt(r["facts"], 1500),
                     **dict.fromkeys(EXPERT_COLUMNS, ""),
                 }

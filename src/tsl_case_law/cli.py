@@ -75,7 +75,17 @@ def cmd_build(args) -> None:
             dropped["no assessment cut (leakage risk)"] += 1
         else:
             kept.append(rec.to_dict())
-    kept.sort(key=lambda r: r["date"])
+    # One case can be published twice (e.g. two SENTENCE documents); keep the fuller one.
+    by_number: dict[str, dict] = {}
+    for r in kept:
+        key = r["case_number"] or f"id:{r['id']}"
+        if key not in by_number or len(r["facts"]) > len(by_number[key]["facts"]):
+            if key in by_number:
+                dropped["duplicate case number"] += 1
+            by_number[key] = r
+        else:
+            dropped["duplicate case number"] += 1
+    kept = sorted(by_number.values(), key=lambda r: r["date"])
     CASES.write_text(
         "".join(json.dumps(r, ensure_ascii=False) + "\n" for r in kept), encoding="utf-8"
     )
@@ -209,6 +219,13 @@ def cmd_check_labels(args) -> None:
     print(
         f"  rules: {_acc([(cases[i]['outcome_rule'], g) for i, g in gold.items() if i in cases])}"
     )
+    for src in ("sentencja", "reasons"):
+        pairs = [
+            (cases[i]["outcome_rule"], g)
+            for i, g in gold.items()
+            if i in cases and cases[i].get("outcome_source") == src
+        ]
+        print(f"    from {src:9s} {_acc(pairs)}")
     if llm:
         pairs = [(llm[i]["outcome_llm"].get("outcome"), g) for i, g in gold.items() if i in llm]
         print(f"  LLM:   {_acc(pairs)}")

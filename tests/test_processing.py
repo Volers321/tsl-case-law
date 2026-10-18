@@ -179,3 +179,43 @@ def test_new_assessment_markers_cut_facts():
         "Powództwo nie zasługiwało na uwzględnienie, bo roszczenie się przedawniło."
     )
     assert sec.facts == "Powód żądał frachtu."
+
+
+@pytest.mark.parametrize(
+    "sentencja,appeal,expected",
+    [
+        (
+            "I. zasądza od pozwanego na rzecz powoda kwotę 45.009 zł z ustawowymi odsetkami od dnia "
+            "29 stycznia 2013r. do dnia zapłaty, II.zasądza od pozwanego na rzecz powoda kwotę "
+            "41.111,45 zł tytułem zwrotu kosztów procesu",
+            None,
+            "GRANTED",
+        ),
+        (
+            "zasądza od pozwanego kwotę 5 000 zł z odsetkami od dnia 3 marca 2015 r. oraz kwotę 917 zł "
+            "tytułem kosztów procesu",
+            None,
+            "GRANTED",
+        ),
+        (
+            "1. zmienia zaskarżony wyrok w punkcie 1 w ten sposób, że powództwo oddala, - w punkcie 2 "
+            "w ten sposób, że zasądza od powódki kwotę 3.617 złotych tytułem zwrotu kosztów procesu; "
+            "2. zasądza od powódki kwotę 9.960 złotych tytułem kosztów postępowania apelacyjnego",
+            True,
+            "CHANGED",
+        ),
+        (
+            "I. powództwo główne w całości oddala; II. zasądza od powoda koszty procesu",
+            None,
+            "DISMISSED",
+        ),
+        (
+            "zasądza od pozwanego kwotę 2 700 zł tytułem kosztów procesu z odsetkami ustawowymi za "
+            "opóźnienie od dnia uprawomocnienia się wyroku; oddala powództwo",
+            None,
+            "DISMISSED",
+        ),
+    ],
+)
+def test_rule_outcome_cost_orders_round_two(sentencja, appeal, expected):
+    assert rule_outcome(sentencja, appeal=appeal)[1] == expected

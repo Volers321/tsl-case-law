@@ -113,7 +113,8 @@ def _has(pattern: str, text: str) -> bool:
 
 
 _POINT_SPLIT = re.compile(
-    r";|(?:^|\s)(?:\d{1,2}|[IVX]{1,4})[.)]\s"  # numbered points
+    # numbered points, also without a space after the number ("II.zasądza")
+    r";|(?:^|\s)(?:\d{1,2}|[IVX]{1,4})[.)](?:\s|(?=[a-ząćęłńóśźż]))"
     r"|\s+i\s+(?=zasądza|nakazuje|obciąża|przyznaje|znosi)"  # "oddala … i zasądza koszty"
 )
 
@@ -125,12 +126,17 @@ def _drop_cost_orders(s: str) -> str:
     for "zasądza" would label dismissals as wins.
     """
     points = [p.strip() for p in _POINT_SPLIT.split(s) if p and p.strip()]
-    kept = [
-        p
-        for p in points
-        if not re.search(r"koszt|opłat\w* sądow|wynagrodzeni\w* pełnomocnik", p, re.I)
-    ]
+    kept = [p for p in points if not _is_cost_order(p)]
     return " ; ".join(kept)
+
+
+def _is_cost_order(point: str) -> bool:
+    if not re.search(r"koszt|opłat\w* sądow|wynagrodzeni\w* pełnomocnik", point, re.I):
+        return False
+    # A point that awards the claim and its costs together ("zasądza kwotę 5 000 zł z
+    # odsetkami od dnia 29 stycznia 2013 r. oraz kwotę 917 zł tytułem kosztów") is kept:
+    # interest from a calendar date belongs to the claim, costs run from finality.
+    return not re.search(r"odset\w*[^;]{0,80}?od\s+dnia\s+\d", point, re.I)
 
 
 def rule_outcome(sentencja: str, appeal: bool | None = None) -> tuple[str, str]:
@@ -141,11 +147,14 @@ def rule_outcome(sentencja: str, appeal: bool | None = None) -> tuple[str, str]:
     the wording.
     The rules are deliberately simple; their accuracy is measured against human labels.
     """
-    s = _drop_cost_orders(_unspace(" ".join(sentencja.split())))
+    full = _unspace(" ".join(sentencja.split()))
+    s = _drop_cost_orders(full)
     if appeal is None:
         appeal = _has(r"apelacj|skarg\w* kasacyjn|zażaleni", s)
     if appeal:
-        if _has(r"\bzmienia\b", s):
+        # "zmienia zaskarżony wyrok w punkcie 1 w ten sposób, że powództwo oddala, w punkcie 2
+        # … kosztów procesu" is one long point that also mentions costs — look at it whole.
+        if _has(r"\bzmienia\b", s) or _has(r"\bzmienia\b[^;]{0,400}powództw", full):
             return "appeal", "CHANGED"
         if _has(r"\buchyla\b", s):
             return "appeal", "SET_ASIDE"
@@ -166,7 +175,7 @@ def rule_outcome(sentencja: str, appeal: bool | None = None) -> tuple[str, str]:
     if _has(r"\bzasądza\b", s) or upheld:
         partial = rest_dismissed or _has(r"utrzymuje\s+\w*\s*w\s+mocy[^;]{0,80}w\s+części", s)
         return "first", "PARTIAL" if partial else "GRANTED"
-    if _has(r"\boddala\s+powództwo\b|\bpowództwo\s+oddala\b", s):
+    if _has(r"\boddala\s+powództwo\b|\bpowództw\w*\s+(?:\w+\s+){0,3}oddala\b", s):
         return "first", "DISMISSED"
     return "first", UNKNOWN
 
