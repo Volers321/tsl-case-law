@@ -5,6 +5,7 @@ Typical flow:
     tsl build                          # raw JSON -> data/cases.jsonl (+ filters)
     tsl stats                          # what we've got
     tsl sample -n 50                   # CSV for the expert to label
+    tsl label                          # expert reviews the sample, one case at a time
     tsl check-labels                   # how good are the rules vs. the expert?
     tsl extract --ids-from-labels      # LLM features for the labelled cases (needs API key)
 """
@@ -17,7 +18,7 @@ import sys
 from collections import Counter
 from pathlib import Path
 
-from .labeling import export_for_labeling, read_labels, stratified_sample
+from .labeling import export_for_labeling, label_interactively, read_labels, stratified_sample
 from .processing import CIVIL_REGISTERS, to_record
 
 RAW = Path("data/raw")
@@ -198,6 +199,12 @@ def _acc(pairs: list[tuple]) -> str:
     return f"{ok}/{len(pairs)} ({ok / len(pairs):.0%})" if pairs else "—"
 
 
+def cmd_label(args) -> None:
+    if not LABEL_SHEET.exists():
+        raise SystemExit(f"{LABEL_SHEET} not found — run `tsl sample` first.")
+    label_interactively(LABEL_SHEET)
+
+
 def cmd_check_labels(args) -> None:
     labels = read_labels(LABEL_SHEET)
     if not labels:
@@ -303,6 +310,9 @@ def main(argv: list[str] | None = None) -> None:
     s.add_argument("--force", action="store_true")
     s.set_defaults(func=cmd_sample)
 
+    sub.add_parser("label", help="review the sample case by case (Enter = yes)").set_defaults(
+        func=cmd_label
+    )
     sub.add_parser("check-labels", help="compare rules with expert labels").set_defaults(
         func=cmd_check_labels
     )

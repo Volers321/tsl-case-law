@@ -133,3 +133,27 @@ def test_check_labels_compares_rules_and_llm(tmp_path, monkeypatch, capsys):
     assert "LLM relevance (is_tsl) agreement: 2/3 (67%)" in out
     assert "LLM dispute type agreement:       1/2 (50%)" in out
     assert "✗ I C 2/24: rule=GRANTED gold=PARTIAL llm=PARTIAL" in out
+
+
+def test_interactive_labelling_saves_and_resumes(tmp_path):
+    from tsl_case_law.labeling import label_interactively
+
+    path = tmp_path / "s.csv"
+    cases = make_cases((3, 0, 0))
+    export_for_labeling(cases, path)
+    # case 1: TSL, type 1 (freight), rule correct (Enter); case 2: not TSL; then quit
+    answers = iter(["", "1", "", "n", "q"])
+    assert label_interactively(path, ask=lambda _: next(answers), show=lambda *_: None) == 2
+    labels = read_labels(path)
+    assert labels[cases[0]["id"]] == {
+        "is_tsl": "tak",
+        "dispute_type": "zaplata_frachtu",
+        "outcome_rule_ok": "tak",
+        "outcome_gold": "",
+        "notes": "",
+    }
+    assert labels[cases[1]["id"]]["is_tsl"] == "nie"
+    # resume: only case 3 is asked; rule wrong -> pick the correct outcome (3 = DISMISSED)
+    answers = iter(["", "8", "n", "3"])
+    assert label_interactively(path, ask=lambda _: next(answers), show=lambda *_: None) == 1
+    assert read_labels(path)[cases[2]["id"]]["outcome_gold"] == "DISMISSED"

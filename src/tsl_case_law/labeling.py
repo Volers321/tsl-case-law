@@ -103,3 +103,124 @@ def read_labels(path: str | Path) -> dict[int, dict]:
             continue  # not labelled yet
         labels[int(row["id"])] = {k: (row.get(k) or "").strip() for k in EXPERT_COLUMNS}
     return labels
+
+
+# ------------------------------------------------------------------ interactive labelling
+
+OUTCOMES_FIRST = ("GRANTED", "PARTIAL", "DISMISSED", "DISCONTINUED", "UNKNOWN")
+OUTCOMES_APPEAL = ("APPEAL_DISMISSED", "CHANGED", "SET_ASIDE", "UNKNOWN")
+OUTCOME_PL = {
+    "GRANTED": "powództwo uwzględnione w całości",
+    "PARTIAL": "uwzględnione w części",
+    "DISMISSED": "powództwo oddalone",
+    "DISCONTINUED": "postępowanie umorzone",
+    "APPEAL_DISMISSED": "apelacja oddalona / odrzucona",
+    "CHANGED": "wyrok zmieniony",
+    "SET_ASIDE": "wyrok uchylony",
+    "UNKNOWN": "nie da się ustalić",
+}
+DISPUTE_PL = {
+    "zaplata_frachtu": "zapłata frachtu",
+    "szkoda_w_ladunku": "szkoda / utrata ładunku",
+    "opoznienie": "opóźnienie dostawy",
+    "odpowiedzialnosc_spedytora": "odpowiedzialność spedytora",
+    "kary_umowne": "kary umowne",
+    "przedawnienie_reklamacja": "przedawnienie / reklamacja",
+    "ubezpieczenie_oc": "ubezpieczenie OC przewoźnika",
+    "inne": "inne",
+}
+YES_ANSWERS = {"", "t", "tak", "y"}
+
+
+class Quit(Exception):
+    pass
+
+
+def _read_sheet(path: Path) -> tuple[list[str], list[dict]]:
+    raw = path.read_text(encoding="utf-8-sig")
+    dialect = csv.Sniffer().sniff(raw.splitlines()[0], delimiters=";,")
+    reader = csv.DictReader(raw.splitlines(), dialect=dialect)
+    return list(reader.fieldnames or []), list(reader)
+
+
+def _write_sheet(path: Path, fields: list[str], rows: list[dict]) -> None:
+    tmp = path.with_suffix(".part")
+    with tmp.open("w", newline="", encoding="utf-8-sig") as f:
+        w = csv.DictWriter(f, fieldnames=fields, delimiter=";")
+        w.writeheader()
+        w.writerows(rows)
+    tmp.replace(path)  # saved after every case: closing the window loses nothing
+
+
+def _choose(ask, prompt: str, options: tuple[str, ...], labels: dict[str, str]) -> str:
+    menu = "\n".join(f"   {i}  {labels.get(o, o)}" for i, o in enumerate(options, start=1))
+    while True:
+        answer = ask(f"{prompt}\n{menu}\n > ").strip().lower()
+        if answer == "q":
+            raise Quit
+        if answer.isdigit() and 1 <= int(answer) <= len(options):
+            return options[int(answer) - 1]
+
+
+def _yes_no(ask, prompt: str) -> bool:
+    while True:
+        answer = ask(prompt).strip().lower()
+        if answer == "q":
+            raise Quit
+        if answer in YES_ANSWERS:
+            return True
+        if answer in ("n", "nie"):
+            return False
+
+
+def label_interactively(path: str | Path, *, ask=input, show=print, width: int = 500) -> int:
+    """Walk through unlabelled rows one at a time; Enter = "tak", q = save and quit.
+
+    Returns the number of rows labelled in this session. Progress is written to the same
+    CSV after every case, so the session can be stopped and resumed at any time.
+    """
+    path = Path(path)
+    fields, rows = _read_sheet(path)
+    todo = [r for r in rows if not (r.get("is_tsl") or "").strip()]
+    done_before = len(rows) - len(todo)
+    show(f"\nOcenione: {done_before}/{len(rows)}. Enter = tak, n = nie, q = zapisz i wyjdź.\n")
+    labelled = 0
+    for row in todo:
+        n = done_before + labelled + 1
+        appeal = row.get("instance") == "appeal"
+        show("=" * 78)
+        show(f"[{n}/{len(rows)}] {row['case_number']} · {row['court']} · {row['date']}")
+        show(f"Instancja: {'APELACJA / kasacja' if appeal else 'pierwsza'}")
+        show(f"\nFAKTY (początek): {_excerpt(row.get('facts_excerpt', ''), width)}")
+        show(f"\nROZSTRZYGNIĘCIE (koniec sentencji): {_tail(row.get('sentencja_end', ''), width)}")
+        if row.get("conclusion"):
+            show(f"\nWNIOSEK SĄDU (koniec uzasadnienia): {_tail(row['conclusion'], 300)}")
+        show("")
+        try:
+            if not _yes_no(ask, "1) Czy to spór z przewozu / spedycji? [Enter=tak / n] > "):
+                row["is_tsl"] = "nie"
+            else:
+                dispute = _choose(ask, "2) Rodzaj sporu:", DISPUTE_TYPES, DISPUTE_PL)
+                rule = row.get("outcome_rule", "UNKNOWN")
+                ok = _yes_no(
+                    ask,
+                    f"3) Program odczytał wynik: {rule} = {OUTCOME_PL.get(rule, rule)}. "
+                    "Zgadza się? [Enter=tak / n] > ",
+                )
+                gold = ""
+                if not ok:
+                    options = OUTCOMES_APPEAL if appeal else OUTCOMES_FIRST
+                    gold = _choose(ask, "   Jaki jest poprawny wynik?", options, OUTCOME_PL)
+                row.update(
+                    is_tsl="tak",
+                    dispute_type=dispute,
+                    outcome_rule_ok="tak" if ok else "nie",
+                    outcome_gold=gold,
+                )
+        except (Quit, EOFError, KeyboardInterrupt):
+            show(f"\nZapisano. Ocenione: {done_before + labelled}/{len(rows)}.")
+            return labelled
+        _write_sheet(path, fields, rows)
+        labelled += 1
+    show(f"\nGotowe! Ocenione wszystkie {len(rows)} sprawy. Teraz: tsl check-labels")
+    return labelled
