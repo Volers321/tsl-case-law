@@ -40,7 +40,7 @@ SAOS API ──► download ──► build ────────────
 
 | Step | Dropped | Why |
 |---|---:|---|
-| Case register (repertorium) not civil | 254 | TSL words also appear in criminal (K, Ka), labour (P, Pa), social-insurance (U, AUa) and consumer-clause (AmC) cases |
+| Case register (repertorium) not civil | 228 | TSL words also appear in criminal (K, Ka), labour (P, Pa), social-insurance (U, AUa) and consumer-clause (AmC) cases |
 | Keyword relevance score < 6 | 131 | |
 | No reasons, or start of the court's assessment not found | 53 | without the cut, "facts" would contain the court's reasoning — **outcome leakage** |
 
@@ -60,7 +60,7 @@ The first version of the pipeline kept 1305 cases, 24% with an unknown outcome a
 
 **What went wrong, and what it taught me**
 
-- *My own first labels were wrong.* The first pass said only 11/30 cases were TSL. The LLM disagreed on 13; reviewing them side by side (`tsl label --disputed`) I changed 11 — e.g. unpaid freight for six container runs, which I had rushed past as "not TSL". Expert labels need adjudication too.
+- *My own first labels were wrong.* The first pass said only 11/30 cases were TSL. The LLM disagreed on 13; reviewing them side by side (`tsl label --disputed`) I changed all 13 — 11 TSL cases I had marked "no" (e.g. unpaid freight for six container runs, which I had rushed past) and 2 passenger-ticket cases I had marked "yes". Expert labels need adjudication too.
 - *"Prawo przewozowe" covers passengers.* The main false positives are fare-evasion suits and passenger injuries. The LLM prompt now defines TSL as carriage of **goods**, forwarding and carrier/forwarder liability insurance.
 - *Why the 30/30 is optimistic.* The prompt definition was refined after seeing these labels, and disagreements were adjudicated with the LLM summary on screen (anchoring). An unbiased estimate needs a fresh batch labelled blind (`tsl sample --add 20`, reported per batch by `tsl check-labels`); with n=30 any figure has a wide confidence interval anyway.
 - *Gold labels are frozen.* A confirmed outcome stores the label the expert saw, so later rule changes cannot silently rewrite the gold set.
