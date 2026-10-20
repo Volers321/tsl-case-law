@@ -35,6 +35,7 @@ EXPORT_COLUMNS = (
     "sentencja_end",
     "conclusion",
     "facts_excerpt",
+    "batch",
     *EXPERT_COLUMNS,
 )
 
@@ -67,13 +68,26 @@ def stratified_sample(records: list[dict], n: int, *, seed: int = 13) -> list[di
     return sample
 
 
-def export_for_labeling(records: list[dict], path: str | Path) -> int:
+def export_for_labeling(
+    records: list[dict], path: str | Path, *, append: bool = False, batch: int = 1
+) -> int:
+    """Write a label sheet; with ``append`` add rows as a new batch, keeping earlier labels.
+
+    Batches matter for honest evaluation: anything tuned after looking at batch 1 must be
+    measured on a later batch.
+    """
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
+    old_rows: list[dict] = []
+    if append and path.exists():
+        _, old_rows = _read_sheet(path)
+        for r in old_rows:
+            r["batch"] = r.get("batch") or "1"
     # utf-8-sig so Excel / Numbers open Polish characters correctly
     with path.open("w", newline="", encoding="utf-8-sig") as f:
-        w = csv.DictWriter(f, fieldnames=EXPORT_COLUMNS, delimiter=";")
+        w = csv.DictWriter(f, fieldnames=EXPORT_COLUMNS, delimiter=";", extrasaction="ignore")
         w.writeheader()
+        w.writerows(old_rows)
         for r in records:
             w.writerow(
                 {
@@ -87,6 +101,7 @@ def export_for_labeling(records: list[dict], path: str | Path) -> int:
                     "sentencja_end": _tail(r["sentencja"], 900),
                     "conclusion": _tail(r.get("assessment", ""), 700),
                     "facts_excerpt": _excerpt(r["facts"], 1500),
+                    "batch": batch,
                     **dict.fromkeys(EXPERT_COLUMNS, ""),
                 }
             )
@@ -102,6 +117,7 @@ def read_labels(path: str | Path) -> dict[int, dict]:
         if not (row.get("is_tsl") or "").strip():
             continue  # not labelled yet
         labels[int(row["id"])] = {k: (row.get(k) or "").strip() for k in EXPERT_COLUMNS}
+        labels[int(row["id"])]["batch"] = int((row.get("batch") or "1").strip() or 1)
     return labels
 
 

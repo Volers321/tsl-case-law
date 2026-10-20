@@ -176,12 +176,25 @@ def cmd_inspect(args) -> None:
 
 def cmd_sample(args) -> None:
     cases = load_cases()
+    if args.add:
+        if not LABEL_SHEET.exists():
+            raise SystemExit(f"{LABEL_SHEET} not found — run `tsl sample` first.")
+        labels = read_labels(LABEL_SHEET)
+        from .labeling import _read_sheet
+
+        _, rows = _read_sheet(LABEL_SHEET)
+        seen = {int(r["id"]) for r in rows}
+        batch = max([lab["batch"] for lab in labels.values()] or [1]) + 1
+        fresh = [c for c in cases if c["id"] not in seen]
+        sample = stratified_sample(fresh, args.add, seed=args.seed + batch)
+        export_for_labeling(sample, LABEL_SHEET, append=True, batch=batch)
+        print(f"Added {len(sample)} new cases as batch {batch} to {LABEL_SHEET}. Now: tsl label")
+        return
     if LABEL_SHEET.exists() and not args.force:
         raise SystemExit(f"{LABEL_SHEET} exists — it may contain your labels. Use --force.")
     sample = stratified_sample(cases, args.n, seed=args.seed)
     export_for_labeling(sample, LABEL_SHEET)
-    print(f"Wrote {len(sample)} cases to {LABEL_SHEET}")
-    print("Open it in Numbers/Excel, fill the last 5 columns, save as CSV (same name).")
+    print(f"Wrote {len(sample)} cases to {LABEL_SHEET}. Now: tsl label")
 
 
 YES = {"tak", "t", "yes", "y", "1", "true"}
@@ -235,8 +248,11 @@ def cmd_check_labels(args) -> None:
     print("  -> precision of the keyword relevance filter (`tsl build --min-score`)")
 
     gold = {i: _gold_outcome(labels[i], cases.get(i, {})) for i in tsl}
-    gold = {i: g for i, g in gold.items() if g}
-    print("\noutcome accuracy vs expert:")
+    undecidable = sum(g == "UNKNOWN" for g in gold.values())
+    # "UNKNOWN" from the expert means the excerpt does not show the outcome — such cases
+    # say nothing about whether a rule or the LLM is right, so they are left out.
+    gold = {i: g for i, g in gold.items() if g and g != "UNKNOWN"}
+    print(f"\noutcome accuracy vs expert ({undecidable} undecidable from the excerpt, skipped):")
     print(
         f"  rules: {_acc([(cases[i]['outcome_rule'], g) for i, g in gold.items() if i in cases])}"
     )
@@ -252,6 +268,16 @@ def cmd_check_labels(args) -> None:
         print(f"  LLM:   {_acc(pairs)}")
         rel = [(llm[i]["facts_llm"].get("is_tsl", False), i in tsl) for i in labels if i in llm]
         print(f"\nLLM relevance (is_tsl) agreement: {_acc(rel)}")
+        batches = sorted({lab["batch"] for lab in labels.values()})
+        if len(batches) > 1:
+            for b in batches:
+                part = [
+                    (llm[i]["facts_llm"].get("is_tsl", False), i in tsl)
+                    for i in labels
+                    if i in llm and labels[i]["batch"] == b
+                ]
+                note = " (prompt tuned on it, adjudicated)" if b == 1 else " (unseen: honest)"
+                print(f"  batch {b}: {_acc(part)}{note}")
         tp = sum(p and g for p, g in rel)
         fp = sum(p and not g for p, g in rel)
         fn = sum(g and not p for p, g in rel)
@@ -295,6 +321,12 @@ def cmd_check_labels(args) -> None:
     if yes and no:
         print(f"\nTSL score — relevant: {yes}")
         print(f"TSL score — not TSL:  {no}")
+        print("keyword threshold:  precision / recall on the labelled cases")
+        for t in (6, 10, 15, 20, 25, 30):
+            kept_yes = sum(x >= t for x in yes)
+            kept_no = sum(x >= t for x in no)
+            prec = kept_yes / max(kept_yes + kept_no, 1)
+            print(f"  >= {t:2d}: {prec:4.0%} / {kept_yes / len(yes):4.0%}")
     not_tsl = [i for i in labels if i not in tsl and i in cases]
     if not_tsl:
         print("\nnot TSL according to the expert:")
@@ -321,7 +353,7 @@ def cmd_extract(args) -> None:
     print(
         f"Extracting {len(cases)} cases with {llm.provider}/{llm.model} (prompt {PROMPT_VERSION})"
     )
-    rows = extract_all(llm, cases)
+    rows = extract_all(llm, cases, workers=args.workers)
     EXTRACTED.write_text("".join(json.dumps(r, ensure_ascii=False) + "\n" for r in rows), "utf-8")
     failed = sum(not (r["facts_llm"]["ok"] and r["outcome_llm"]["ok"]) for r in rows)
     print(f"Wrote {len(rows)} rows to {EXTRACTED}; {failed} with unparseable answers")
@@ -358,6 +390,7 @@ def main(argv: list[str] | None = None) -> None:
     s.add_argument("-n", type=int, default=50)
     s.add_argument("--seed", type=int, default=13)
     s.add_argument("--force", action="store_true")
+    s.add_argument("--add", type=int, metavar="N", help="append N new cases as a new batch")
     s.set_defaults(func=cmd_sample)
 
     lab = sub.add_parser("label", help="review the sample case by case (Enter = yes)")
@@ -372,6 +405,7 @@ def main(argv: list[str] | None = None) -> None:
     e = sub.add_parser("extract", help="LLM: party roles, dispute type, claim, defences, outcome")
     e.add_argument("--limit", type=int, help="only the first N cases (cost control)")
     e.add_argument("--ids-from-labels", action="store_true", help="only cases in the label sheet")
+    e.add_argument("--workers", type=int, default=6, help="parallel API calls")
     e.set_defaults(func=cmd_extract)
 
     args = p.parse_args(argv)

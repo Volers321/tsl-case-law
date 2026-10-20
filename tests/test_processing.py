@@ -219,3 +219,9 @@ def test_new_assessment_markers_cut_facts():
 )
 def test_rule_outcome_cost_orders_round_two(sentencja, appeal, expected):
     assert rule_outcome(sentencja, appeal=appeal)[1] == expected
+
+
+def test_withdrawn_counterclaim_is_not_discontinued():
+    s = "I. oddala powództwo główne; II. umarza postępowanie w zakresie powództwa wzajemnego"
+    assert rule_outcome(s)[1] == "DISMISSED"
+    assert rule_outcome("I. umarza postępowanie")[1] == "DISCONTINUED"

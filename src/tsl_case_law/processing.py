@@ -170,7 +170,9 @@ def rule_outcome(sentencja: str, appeal: bool | None = None) -> tuple[str, str]:
         r"(w\s+pozostał\w+\s+(zakresie|części)\s+(powództwo\s+)?oddala|oddala\s+powództwo\s+w\s+pozostał)",
         s,
     )
-    if _has(r"\bumarza\b", s) and not _has(r"\bzasądza\b", s) and not upheld:
+    # "umarza" alone means discontinued; next to "oddala" it is usually a partial
+    # withdrawal (e.g. of a counterclaim) and the case was decided on the merits.
+    if _has(r"\bumarza\b", s) and not _has(r"\b(zasądza|oddala)\b", s) and not upheld:
         return "first", "DISCONTINUED"
     if _has(r"\bzasądza\b", s) or upheld:
         partial = rest_dismissed or _has(r"utrzymuje\s+\w*\s*w\s+mocy[^;]{0,80}w\s+części", s)

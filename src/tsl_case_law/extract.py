@@ -146,25 +146,44 @@ def extract_all(
     cases: list[dict],
     cache_dir: str | Path = "data/cache/extract",
     *,
+    workers: int = 6,
     progress: Callable[[str], None] = print,
 ) -> list[dict]:
-    """Extract features for every case, reusing cached results for this prompt version."""
+    """Extract features for every case, reusing cached results for this prompt version.
+
+    Uncached cases run ``workers`` at a time (API calls are I/O-bound); each result is
+    cached as soon as it arrives, so an interrupted run resumes without repeating calls.
+    """
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
     cache_dir = Path(cache_dir) / PROMPT_VERSION
     cache_dir.mkdir(parents=True, exist_ok=True)
-    out, fresh = [], 0
-    for n, case in enumerate(cases, start=1):
+    rows: dict[int, dict] = {}
+    todo = []
+    for case in cases:
         path = cache_dir / f"{case['id']}.json"
         if path.exists():
-            row = json.loads(path.read_text(encoding="utf-8"))
+            rows[case["id"]] = json.loads(path.read_text(encoding="utf-8"))
         else:
-            row = {
-                "id": case["id"],
-                "facts_llm": extract_facts(llm, case),
-                "outcome_llm": extract_outcome(llm, case),
-            }
-            path.write_text(json.dumps(row, ensure_ascii=False), encoding="utf-8")
-            fresh += 1
-        out.append(row)
-        if n % 20 == 0 or n == len(cases):
-            progress(f"extracted {n}/{len(cases)} ({fresh} new calls)")
-    return out
+            todo.append(case)
+    progress(f"{len(rows)} cached, {len(todo)} to extract")
+
+    def work(case: dict) -> dict:
+        row = {
+            "id": case["id"],
+            "facts_llm": extract_facts(llm, case),
+            "outcome_llm": extract_outcome(llm, case),
+        }
+        (cache_dir / f"{case['id']}.json").write_text(
+            json.dumps(row, ensure_ascii=False), encoding="utf-8"
+        )
+        return row
+
+    with ThreadPoolExecutor(max_workers=max(1, workers)) as pool:
+        futures = [pool.submit(work, c) for c in todo]
+        for n, fut in enumerate(as_completed(futures), start=1):
+            row = fut.result()
+            rows[row["id"]] = row
+            if n % 25 == 0 or n == len(todo):
+                progress(f"extracted {n}/{len(todo)}")
+    return [rows[c["id"]] for c in cases]

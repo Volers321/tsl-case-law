@@ -58,6 +58,7 @@ def test_label_roundtrip_semicolon_and_comma(tmp_path):
             "outcome_rule_ok": "nie",
             "outcome_gold": "PARTIAL",
             "notes": "",
+            "batch": 1,
         }
     }
 
@@ -151,6 +152,7 @@ def test_interactive_labelling_saves_and_resumes(tmp_path):
         "outcome_rule_ok": "tak",
         "outcome_gold": "",
         "notes": "",
+        "batch": 1,
     }
     assert labels[cases[1]["id"]]["is_tsl"] == "nie"
     # resume: only case 3 is asked; rule wrong -> pick the correct outcome (3 = DISMISSED)
@@ -179,3 +181,23 @@ def test_review_mode_reasks_only_disputed_and_restores_on_quit(tmp_path):
     assert labels[b]["is_tsl"] == "nie", "unreviewed case keeps its earlier label"
     assert labels[cases[2]["id"]]["is_tsl"] == "nie", "undisputed case untouched"
     assert any("STRESZCZENIE LLM: fracht" in str(x) for x in shown)
+
+
+def test_sample_add_appends_new_batch_and_keeps_labels(tmp_path, monkeypatch):
+    from tsl_case_law.labeling import label_interactively
+
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "data/labels").mkdir(parents=True)
+    cases = make_cases((6, 2, 1))
+    (tmp_path / "data/cases.jsonl").write_text("".join(json.dumps(c) + "\n" for c in cases))
+    cli.main(["sample", "-n", "3"])
+    answers = iter(["n", "n", "n"])
+    label_interactively(cli.LABEL_SHEET, ask=lambda _: next(answers), show=lambda *_: None)
+    cli.main(["sample", "--add", "4"])
+    from tsl_case_law.labeling import _read_sheet
+
+    _, rows = _read_sheet(cli.LABEL_SHEET)
+    assert len(rows) == 7 and len({r["id"] for r in rows}) == 7, "no case sampled twice"
+    labels = read_labels(cli.LABEL_SHEET)
+    assert len(labels) == 3 and {lab["batch"] for lab in labels.values()} == {1}
+    assert sum(r["batch"] == "2" and not r["is_tsl"] for r in rows) == 4
