@@ -173,32 +173,52 @@ def _yes_no(ask, prompt: str) -> bool:
             return False
 
 
-def label_interactively(path: str | Path, *, ask=input, show=print, width: int = 500) -> int:
+def label_interactively(
+    path: str | Path,
+    *,
+    ask=input,
+    show=print,
+    width: int = 500,
+    review: dict[int, str] | None = None,
+) -> int:
     """Walk through unlabelled rows one at a time; Enter = "tak", q = save and quit.
 
-    Returns the number of rows labelled in this session. Progress is written to the same
-    CSV after every case, so the session can be stopped and resumed at any time.
+    With ``review`` ({id: hint}) only those rows are shown again, already labelled or not,
+    together with the hint (e.g. the LLM's summary where it disagrees with the expert), so
+    disagreements can be adjudicated. Returns the number of rows labelled in this session.
+    Progress is written to the same CSV after every case.
     """
     path = Path(path)
     fields, rows = _read_sheet(path)
-    todo = [r for r in rows if not (r.get("is_tsl") or "").strip()]
-    done_before = len(rows) - len(todo)
-    show(f"\nOcenione: {done_before}/{len(rows)}. Enter = tak, n = nie, q = zapisz i wyjdź.\n")
+    if review is not None:
+        # Rows keep their old labels until answered again, so quitting (or closing the
+        # window) at any point never loses an earlier label.
+        todo = [r for r in rows if int(r["id"]) in review]
+        done_before = 0
+        rows_total = len(todo)
+    else:
+        todo = [r for r in rows if not (r.get("is_tsl") or "").strip()]
+        done_before = len(rows) - len(todo)
+        rows_total = len(rows)
+    show(f"\nOcenione: {done_before}/{rows_total}. Enter = tak, n = nie, q = zapisz i wyjdź.\n")
     labelled = 0
     for row in todo:
         n = done_before + labelled + 1
         appeal = row.get("instance") == "appeal"
         show("=" * 78)
-        show(f"[{n}/{len(rows)}] {row['case_number']} · {row['court']} · {row['date']}")
+        show(f"[{n}/{rows_total}] {row['case_number']} · {row['court']} · {row['date']}")
         show(f"Instancja: {'APELACJA / kasacja' if appeal else 'pierwsza'}")
         show(f"\nFAKTY (początek): {_excerpt(row.get('facts_excerpt', ''), width)}")
         show(f"\nROZSTRZYGNIĘCIE (koniec sentencji): {_tail(row.get('sentencja_end', ''), width)}")
         if row.get("conclusion"):
             show(f"\nWNIOSEK SĄDU (koniec uzasadnienia): {_tail(row['conclusion'], 300)}")
+        if review is not None:
+            show(f"\nSTRESZCZENIE LLM: {review[int(row['id'])]}")
+            show(f"Twoja wcześniejsza odpowiedź na pytanie 1: {row.get('is_tsl') or '—'}")
         show("")
         try:
             if not _yes_no(ask, "1) Czy to spór z przewozu / spedycji? [Enter=tak / n] > "):
-                row["is_tsl"] = "nie"
+                row.update(is_tsl="nie", dispute_type="", outcome_rule_ok="", outcome_gold="")
             else:
                 dispute = _choose(ask, "2) Rodzaj sporu:", DISPUTE_TYPES, DISPUTE_PL)
                 rule = row.get("outcome_rule", "UNKNOWN")
@@ -218,9 +238,9 @@ def label_interactively(path: str | Path, *, ask=input, show=print, width: int =
                     outcome_gold=gold,
                 )
         except (Quit, EOFError, KeyboardInterrupt):
-            show(f"\nZapisano. Ocenione: {done_before + labelled}/{len(rows)}.")
+            show(f"\nZapisano. Ocenione: {done_before + labelled}/{rows_total}.")
             return labelled
         _write_sheet(path, fields, rows)
         labelled += 1
-    show(f"\nGotowe! Ocenione wszystkie {len(rows)} sprawy. Teraz: tsl check-labels")
+    show(f"\nGotowe! Ocenione wszystkie {rows_total} sprawy. Teraz: tsl check-labels")
     return labelled

@@ -157,3 +157,25 @@ def test_interactive_labelling_saves_and_resumes(tmp_path):
     answers = iter(["", "8", "n", "3"])
     assert label_interactively(path, ask=lambda _: next(answers), show=lambda *_: None) == 1
     assert read_labels(path)[cases[2]["id"]]["outcome_gold"] == "DISMISSED"
+
+
+def test_review_mode_reasks_only_disputed_and_restores_on_quit(tmp_path):
+    from tsl_case_law.labeling import label_interactively
+
+    path = tmp_path / "s.csv"
+    cases = make_cases((3, 0, 0))
+    export_for_labeling(cases, path)
+    answers = iter(["n", "n", "n"])  # label all three as not TSL
+    label_interactively(path, ask=lambda _: next(answers), show=lambda *_: None)
+    a, b = cases[0]["id"], cases[1]["id"]
+    # review two disputed cases: flip the first to TSL, quit before the second
+    answers = iter(["", "1", "", "q"])
+    shown = []
+    label_interactively(
+        path, ask=lambda _: next(answers), show=shown.append, review={a: "fracht", b: "x"}
+    )
+    labels = read_labels(path)
+    assert labels[a]["is_tsl"] == "tak" and labels[a]["dispute_type"] == "zaplata_frachtu"
+    assert labels[b]["is_tsl"] == "nie", "unreviewed case keeps its earlier label"
+    assert labels[cases[2]["id"]]["is_tsl"] == "nie", "undisputed case untouched"
+    assert any("STRESZCZENIE LLM: fracht" in str(x) for x in shown)
