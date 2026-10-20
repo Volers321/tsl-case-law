@@ -120,7 +120,9 @@ def test_parse_probs_normalises_and_rejects_garbage():
 def test_evaluate_and_intervals():
     gold = ["win", "lose", "win", "partial"]
     perfect = [{lab: float(lab == g) for lab in P.LABELS} for g in gold]
-    assert P.evaluate(gold, perfect) == {"n": 4, "accuracy": 1.0, "macro_f1": 1.0, "brier": 0.0}
+    r = P.evaluate(gold, perfect)
+    assert (r["accuracy"], r["macro_f1"], r["brier"]) == (1.0, 1.0, 0.0)
+    assert (r["any_win_accuracy"], r["any_win_brier"]) == (1.0, 0.0)
     lo, hi = P.wilson(0.5, 10)
     assert 0.2 < lo < 0.5 < hi < 0.8
 
@@ -140,6 +142,9 @@ def test_cli_predict_eval_end_to_end(tmp_path, monkeypatch, capsys):
     (tmp_path / "data/extracted.jsonl").write_text(
         "".join(json.dumps(r) + "\n" for r in extracted.values())
     )
+    cli.main(["predict-eval", "--methods", "majority", "--dev"])
+    assert "DEV MODE" in capsys.readouterr().out
+    assert not (tmp_path / "data/predict_report.json").exists(), "dev runs write no report"
     cli.main(["predict-eval", "--methods", "majority,tfidf"])
     out = capsys.readouterr().out
     assert "majority" in out and "tfidf" in out and "95% CI" in out
@@ -149,3 +154,13 @@ def test_cli_predict_eval_end_to_end(tmp_path, monkeypatch, capsys):
     assert "acknowledged_debt = yes" in capsys.readouterr().out
     cli.main(["similar", "przedawnienie reklamacja", "-k", "2"])
     assert "przegrana" in capsys.readouterr().out
+
+
+def test_rag_cache_is_invalidated_when_the_precedent_pool_changes(tmp_path):
+    ex = P.build_examples(*make_cases())
+    train, test = P.temporal_split(ex)
+    llm = FakeLLM()
+    P.predict_llm(llm, train, test[:3], k=2, cache_dir=tmp_path, progress=lambda _: None)
+    n = len(llm.prompts)
+    P.predict_llm(llm, train[5:], test[:3], k=2, cache_dir=tmp_path, progress=lambda _: None)
+    assert len(llm.prompts) == n + 3

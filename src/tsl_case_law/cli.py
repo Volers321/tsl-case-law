@@ -384,6 +384,11 @@ def cmd_predict_eval(args) -> None:
 
     examples = _examples()
     train, test = P.temporal_split(examples, args.test_frac)
+    if args.dev:
+        # Development runs never touch the test period: the newest part of the training
+        # data plays the role of the test set. Tune here, report the test set once.
+        train, test = P.temporal_split(train, args.test_frac)
+        print("DEV MODE: validation split inside the training period")
     print(
         f"train {len(train)} ({train[0].date} … {train[-1].date})   "
         f"test {len(test)} ({test[0].date} … {test[-1].date})"
@@ -408,13 +413,19 @@ def cmd_predict_eval(args) -> None:
             raise SystemExit(f"unknown method {m!r}")
         r = P.evaluate(gold, probs) | {"accuracy_ci95": P.bootstrap_ci(gold, probs)}
         results[m] = r
-    print(f"\n{'method':10s} {'accuracy':>9s} {'95% CI':>13s} {'macro-F1':>9s} {'Brier':>7s}")
+    print("\n3 classes (win / partial / lose)            | claimant gets anything?")
+    print(
+        f"{'method':10s} {'accuracy':>8s} {'95% CI':>13s} {'F1':>6s} {'Brier':>6s} | {'acc':>5s} {'Brier':>6s}"
+    )
     for m, r in results.items():
         lo, hi = r["accuracy_ci95"]
         print(
-            f"{m:10s} {r['accuracy']:9.3f}   [{lo:.2f}, {hi:.2f}] {r['macro_f1']:9.3f} {r['brier']:7.3f}"
+            f"{m:10s} {r['accuracy']:8.3f}  [{lo:.2f}, {hi:.2f}] {r['macro_f1']:6.3f} "
+            f"{r['brier']:6.3f} | {r['any_win_accuracy']:5.3f} {r['any_win_brier']:6.3f}"
         )
     print("Brier: 0 = perfect probabilities, lower is better; majority is the bar to beat.")
+    if args.dev:
+        return  # dev results are for tuning only; the report holds test results
     REPORT.write_text(
         json.dumps(
             {
@@ -540,6 +551,7 @@ def main(argv: list[str] | None = None) -> None:
     pe.add_argument("--methods", default="majority,tfidf,llm,llm-rag")
     pe.add_argument("--test-frac", type=float, default=0.2)
     pe.add_argument("-k", type=int, default=5, help="precedents for llm-rag")
+    pe.add_argument("--dev", action="store_true", help="evaluate on a validation split instead")
     pe.set_defaults(func=cmd_predict_eval)
 
     si = sub.add_parser("similar", help="find similar past cases for a description")

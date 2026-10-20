@@ -225,7 +225,9 @@ def predict_llm(
     from concurrent.futures import ThreadPoolExecutor
 
     retriever = SimilarCases(train) if k else None
-    cache = Path(cache_dir) / f"{PREDICT_VERSION}-k{k}"
+    # Precedents depend on which cases are in the training pool, so it is part of the key.
+    pool_key = hashlib.sha1(",".join(str(e.id) for e in train).encode()).hexdigest()[:8]
+    cache = Path(cache_dir) / f"{PREDICT_VERSION}-k{k}" / (pool_key if k else "no-pool")
     cache.mkdir(parents=True, exist_ok=True)
     uniform = {lab: 1 / len(LABELS) for lab in LABELS}
 
@@ -275,11 +277,18 @@ def evaluate(gold: list[str], probs: list[dict]) -> dict:
     brier = sum(
         sum((p[lab] - (g == lab)) ** 2 for lab in LABELS) for p, g in zip(probs, gold, strict=True)
     ) / len(gold)
+    # The question a business usually asks: will the claimant get anything at all?
+    p_any = [p["win"] + p["partial"] for p in probs]
+    g_any = [g != "lose" for g in gold]
+    acc_any = sum((p >= 0.5) == g for p, g in zip(p_any, g_any, strict=True)) / len(gold)
+    brier_any = sum((p - g) ** 2 for p, g in zip(p_any, g_any, strict=True)) / len(gold)
     return {
         "n": len(gold),
         "accuracy": round(acc, 3),
         "macro_f1": round(sum(f1s) / len(f1s), 3) if f1s else 0.0,
         "brier": round(brier, 3),
+        "any_win_accuracy": round(acc_any, 3),
+        "any_win_brier": round(brier_any, 3),
     }
 
 

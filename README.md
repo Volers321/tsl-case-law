@@ -65,6 +65,43 @@ The first version of the pipeline kept 1305 cases, 24% with an unknown outcome a
 - *Why the 30/30 is optimistic.* The prompt definition was refined after seeing these labels, and disagreements were adjudicated with the LLM summary on screen (anchoring). An unbiased estimate needs a fresh batch labelled blind (`tsl sample --add 20`, reported per batch by `tsl check-labels`); with n=30 any figure has a wide confidence interval anyway.
 - *Gold labels are frozen.* A confirmed outcome stores the label the expert saw, so later rule changes cannot silently rewrite the gold set.
 
+### Outcome prediction (first instance, temporal split)
+
+365 first-instance cases that the LLM classed as TSL and whose outcome is known. Methods learn from / retrieve among **292 judgments up to April 2021** and are tested on the **73 newest (May 2021 – April 2026)**. The model sees only the facts section.
+
+| Method | Accuracy (3 classes) | 95% CI | Macro-F1 | Brier ↓ |
+|---|---:|---:|---:|---:|
+| majority class | 0.274 | 0.18–0.37 | 0.143 | 0.724 |
+| TF-IDF + logistic regression | **0.411** | 0.30–0.52 | **0.406** | **0.652** |
+| LLM (`claude-haiku-5-5`), facts summary | 0.397 | 0.29–0.51 | 0.394 | 0.696 |
+| LLM + 5 similar earlier judgments | 0.342 | 0.23–0.44 | 0.339 | 0.703 |
+
+**Reading the table honestly**
+
+- Every method beats the majority baseline, but **the three are statistically indistinguishable**: with 73 test cases the 95% intervals overlap almost entirely. This is a small-data result, not a leaderboard.
+- **Distribution shift.** The majority class in 2015–2021 (claimant wins) is not the majority in 2021–2026 (claimant loses, 41% of the test set), which is why "always predict the usual outcome" scores only 27%.
+- **Precedents did not help — they hurt slightly.** Likely causes, to test next: TF-IDF similarity matches wording, not legal issue (two freight-payment cases look alike whether the defence is limitation or set-off); precedents come from an older period with a different outcome mix, and the model anchors on them.
+- **The LLM is worse calibrated than logistic regression** (Brier 0.696 vs 0.652): its probabilities are more confident than its accuracy justifies.
+- Three classes is a hard target: "partial" covers anything from 5% to 95% of the claim.
+
+All tuning from here on runs on a validation split inside the training period (`tsl predict-eval --dev`); the test set above is reported, not optimised against.
+
+### Pre-trial conduct and outcomes
+
+Share of first-instance cases in which the claimant won at least partly (all cases: 67%, n = 365). Extracted by the LLM from the facts; `null` (not mentioned) is excluded, not counted as "no".
+
+| Conduct (from the facts) | n | Claimant wins | 95% CI (Wilson) |
+|---|---:|---:|---:|
+| defendant acknowledged the debt | 31 | 81% | 64–91% |
+| goods accepted **without** reservations | 71 | 77% | 66–86% |
+| goods accepted **with** reservations | 36 | 56% | 40–70% |
+| complaint **not** filed in time | 31 | 90% | 75–97% |
+| complaint filed in time | 27 | 59% | 41–75% |
+| attempt to settle | 42 | 62% | 47–75% |
+| partial payment made | 86 | 70% | 59–78% |
+
+The striking "late complaint → claimant wins 90%" makes sense once roles are considered: the typical claimant here is a **carrier suing for freight**, and a shipper who did not complain in time about damage cannot set it off. Conduct features only mean something **relative to who is suing whom** — the next version of the table splits by claimant role. Correlation, not causation; small groups, overlapping categories.
+
 ## Status
 
 - [x] SAOS client: topical searches, full-judgment download, resumable, retries, polite rate limiting
@@ -74,8 +111,9 @@ The first version of the pipeline kept 1305 cases, 24% with an unknown outcome a
 - [x] Pre-trial conduct features (demand, acknowledgement, partial payment, settlement attempt, timely complaint, delivery accepted without reservations) — `tsl conduct-stats` with Wilson intervals
 - [x] Similar-case retrieval (TF-IDF) and four outcome predictors on a temporal split, with bootstrap CIs and Brier score — `tsl predict-eval`
 - [x] `tsl predict "<facts>"`: probabilities, reasoning and the cited precedents
-- [ ] Results on the full dataset (needs `tsl extract` over all cases)
-- [ ] Hybrid retrieval + reranking from rag-eval-pl; MCP server; demo
+- [x] Results on the full dataset (above)
+- [ ] Retrieval by legal issue (dense + rerank from rag-eval-pl, same dispute type), calibration, conduct by claimant role — developed on the validation split
+- [ ] FastAPI + Docker, MCP server, demo
 
 ## Quickstart
 
