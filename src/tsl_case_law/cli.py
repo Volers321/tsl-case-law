@@ -257,6 +257,25 @@ def cmd_check_labels(args) -> None:
     types = Counter(labels[i]["dispute_type"] or "—" for i in tsl)
     print("\ndispute types: " + ", ".join(f"{t}:{n}" for t, n in types.most_common()))
 
+    # Why does the keyword filter let non-TSL cases through? Score and topic of each.
+    def score(i):
+        return cases.get(i, {}).get("tsl_score", 0)
+
+    yes = sorted(score(i) for i in tsl)
+    no = sorted(score(i) for i in labels if i not in tsl)
+    if yes and no:
+        print(f"\nTSL score — relevant: {yes}")
+        print(f"TSL score — not TSL:  {no}")
+    not_tsl = [i for i in labels if i not in tsl and i in cases]
+    if not_tsl:
+        print("\nnot TSL according to the expert:")
+    for i in not_tsl:
+        c = cases[i]
+        regs = "; ".join(r[:40] for r in c.get("regulations", [])[:2])
+        print(f"  {c['case_number']} (score {c['tsl_score']:.0f}) {_snip(c['facts'], 160)}")
+        if regs:
+            print(f"      regulations: {regs}")
+
 
 def cmd_extract(args) -> None:
     from .extract import PROMPT_VERSION, extract_all
