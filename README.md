@@ -32,16 +32,48 @@ SAOS API ──► download ──► build ────────────
 
 **Leakage control is the core design decision.** A judgment's operative part (*sentencja*) and the court's legal assessment (*"Sąd zważył, co następuje…"*) both reveal the outcome. The model only ever sees the **facts** section; the split is tested explicitly. Evaluation uses a **temporal split** — train/retrieve on older rulings, test on the newest — so the model cannot have seen test cases, and precedents always predate the case.
 
+## Results so far
+
+### Dataset
+
+1492 judgments downloaded from SAOS (2015–2026) → **1080 civil/commercial cases** after processing:
+
+| Step | Dropped | Why |
+|---|---:|---|
+| Case register (repertorium) not civil | 254 | TSL words also appear in criminal (K, Ka), labour (P, Pa), social-insurance (U, AUa) and consumer-clause (AmC) cases |
+| Keyword relevance score < 6 | 131 | |
+| No reasons, or start of the court's assessment not found | 53 | without the cut, "facts" would contain the court's reasoning — **outcome leakage** |
+
+The first version of the pipeline kept 1305 cases, 24% with an unknown outcome and a 46 000-word "facts" section (a criminal trial). Diagnostics on real data (`tsl inspect`) drove each fix above.
+
+### Measured against a TSL practitioner
+
+30 cases, stratified by outcome, labelled by me (10 years running a transport & forwarding company) with `tsl label`, a one-case-at-a-time terminal tool.
+
+| What | Result |
+|---|---|
+| Relevance — keyword filter (score ≥ 6) | 20/30 TSL (precision 67%) |
+| Relevance — LLM (`claude-haiku-5-5`, facts only) | 30/30 agree ⚠️ optimistic, see below |
+| Outcome — regex rules on the sentencja | 16/18 |
+| Outcome — LLM on the sentencja | 17/18 |
+| Dispute type — LLM | 16/20 |
+
+**What went wrong, and what it taught me**
+
+- *My own first labels were wrong.* The first pass said only 11/30 cases were TSL. The LLM disagreed on 13; reviewing them side by side (`tsl label --disputed`) I changed 11 — e.g. unpaid freight for six container runs, which I had rushed past as "not TSL". Expert labels need adjudication too.
+- *"Prawo przewozowe" covers passengers.* The main false positives are fare-evasion suits and passenger injuries. The LLM prompt now defines TSL as carriage of **goods**, forwarding and carrier/forwarder liability insurance.
+- *Why the 30/30 is optimistic.* The prompt definition was refined after seeing these labels, and disagreements were adjudicated with the LLM summary on screen (anchoring). An unbiased estimate needs a fresh batch labelled blind (`tsl sample --add 20`, reported per batch by `tsl check-labels`); with n=30 any figure has a wide confidence interval anyway.
+- *Gold labels are frozen.* A confirmed outcome stores the label the expert saw, so later rule changes cannot silently rewrite the gold set.
+
 ## Status
 
-- [x] SAOS client: topical searches (statutes cited: Prawo przewozowe, CMR Convention; TSL vocabulary), full-judgment download, resumable, polite rate limiting
-- [x] Processing: HTML cleanup, TSL relevance score, section split, rule-based outcome labels (cost orders ignored), amounts
-- [x] Expert-labelling workflow: stratified sample → spreadsheet → `tsl check-labels`
-- [x] LLM extraction (prompt-versioned cache): party roles, dispute type, claim, defences, neutral summary — from facts only; outcome from the sentencja only
-- [x] `tsl check-labels` scores relevance filter, outcome rules and LLM extraction against the expert
-- [ ] Expert labels for 50 cases
-- [ ] Similar-case retrieval and outcome prediction baselines
-- [ ] Evaluation on held-out judgments; MCP server
+- [x] SAOS client: topical searches, full-judgment download, resumable, retries, polite rate limiting
+- [x] Processing: civil-register filter, section split with leakage guard, rule-based outcomes (cost orders ignored, outcome from reasons when the sentencja is missing), amounts
+- [x] Expert labelling (`tsl label`, `--disputed`, batches) and scoring (`tsl check-labels`)
+- [x] LLM extraction (prompt-versioned cache, parallel): relevance, party roles, dispute type, claim, defences, neutral summary — from facts only; outcome from the sentencja only
+- [ ] LLM relevance filter over all cases
+- [ ] Similar-case retrieval and outcome prediction baselines (majority · classic ML · LLM · LLM + precedents), temporal split
+- [ ] MCP server
 
 ## Quickstart
 
@@ -52,8 +84,9 @@ make install
 tsl download --from 2015-01-01      # searches SAOS, then fetches full judgments (resumable)
 tsl build                           # -> data/cases.jsonl
 tsl stats
-tsl sample -n 50                    # -> data/labels/sample.csv for expert review
-tsl check-labels                    # rules vs. expert, after filling the sheet
+tsl inspect                         # diagnostics of the split and outcome rules
+tsl sample -n 30                    # -> data/labels/sample.csv
+tsl label                           # expert review, one case at a time (Enter = yes)
 cp .env.example .env                # add ANTHROPIC_API_KEY
 tsl extract --ids-from-labels       # LLM features for the labelled cases
 tsl check-labels                    # now also LLM vs. expert
