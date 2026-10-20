@@ -41,7 +41,7 @@ DEFENCES = (
 FACTS_SYSTEM = f"""Jesteś analitykiem sporów w branży transportowo-spedycyjnej (TSL).
 Dostajesz WYŁĄCZNIE opis stanu faktycznego z uzasadnienia wyroku. Zwróć jeden obiekt JSON:
 {{
-  "is_tsl": true/false,                 // czy to spór z umowy przewozu lub spedycji
+  "is_tsl": true/false,                 // patrz DEFINICJA TSL niżej
   "claimant_role": jedna z {list(ROLES)},
   "defendant_role": jedna z {list(ROLES)},
   "dispute_type": jedna z {list(DISPUTE_TYPES)},
@@ -51,6 +51,13 @@ Dostajesz WYŁĄCZNIE opis stanu faktycznego z uzasadnienia wyroku. Zwróć jede
   "defences": lista z {list(DEFENCES)},
   "summary": "neutralne streszczenie faktów, maks. 80 słów"
 }}
+DEFINICJA TSL: is_tsl = true tylko dla sporów z umowy przewozu TOWARÓW (krajowego lub CMR),
+umowy spedycji albo ubezpieczenia OC przewoźnika/spedytora (np. fracht, szkoda w ładunku,
+opóźnienie dostawy, odpowiedzialność spedytora, kary umowne ze zlecenia transportowego).
+is_tsl = false m.in. dla: przewozu osób (bilety, opłaty dodatkowe za jazdę bez biletu,
+wypadki pasażerów, opóźnienia lotów i pociągów), sprzedaży, leasingu, najmu lub naprawy
+pojazdów, sporów pracowniczych kierowców, zamówień publicznych i podatków — nawet jeśli
+w tekście pojawiają się słowa "przewoźnik", "transport" albo "Prawo przewozowe".
 ZASADY: nie opisuj, jak orzekł sąd w tej sprawie, i nie oceniaj, kto ma rację — streszczenie
 ma zawierać tylko fakty i stanowiska stron. Jeśli czegoś nie da się ustalić, użyj null lub "inny"."""
 
