@@ -103,3 +103,19 @@ def test_conduct_is_tri_state_and_tolerates_garbage():
     assert v["conduct"]["acknowledged_debt"] is None, "non-boolean -> unknown, not a guess"
     assert set(v["conduct"]) >= {"settlement_attempt", "complaint_timely"}
     assert validate_facts({"conduct": "brak"})["conduct"]["pretrial_demand"] is None
+
+
+def test_ctrl_c_stops_extraction_without_running_the_queue(tmp_path):
+    import pytest
+
+    class InterruptingLLM(FakeLLM):
+        def complete(self, system, user, max_tokens=800):
+            if len(self.calls) >= 2:
+                raise KeyboardInterrupt
+            return super().complete(system, user, max_tokens)
+
+    llm = InterruptingLLM()
+    cases = [dict(CASE, id=i) for i in range(50)]
+    with pytest.raises(SystemExit):
+        extract_all(llm, cases, cache_dir=tmp_path, workers=1, progress=lambda _: None)
+    assert len(llm.calls) < 10, "queued cases must be cancelled, not processed"

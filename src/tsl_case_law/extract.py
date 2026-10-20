@@ -207,11 +207,18 @@ def extract_all(
         )
         return row
 
-    with ThreadPoolExecutor(max_workers=max(1, workers)) as pool:
+    # No `with`: its exit waits for every queued case, so Ctrl+C would not stop the run.
+    pool = ThreadPoolExecutor(max_workers=max(1, workers))
+    try:
         futures = [pool.submit(work, c) for c in todo]
         for n, fut in enumerate(as_completed(futures), start=1):
             row = fut.result()
             rows[row["id"]] = row
             if n % 25 == 0 or n == len(todo):
                 progress(f"extracted {n}/{len(todo)}")
+    except KeyboardInterrupt:
+        pool.shutdown(wait=False, cancel_futures=True)
+        progress("\nStopped. Finished cases are cached; run the same command to resume.")
+        raise SystemExit(130) from None
+    pool.shutdown()
     return [rows[c["id"]] for c in cases]

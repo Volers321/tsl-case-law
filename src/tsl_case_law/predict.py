@@ -244,8 +244,14 @@ def predict_llm(
         path.write_text(json.dumps(p, ensure_ascii=False), encoding="utf-8")
         return p
 
-    with ThreadPoolExecutor(max_workers=max(1, workers)) as pool:
+    pool = ThreadPoolExecutor(max_workers=max(1, workers))  # no `with`: see extract_all
+    try:
         results = list(pool.map(one, test))
+    except KeyboardInterrupt:
+        pool.shutdown(wait=False, cancel_futures=True)
+        progress("\nStopped. Finished predictions are cached; run again to resume.")
+        raise SystemExit(130) from None
+    pool.shutdown()
     progress(
         f"  llm k={k}: {len(results)} predictions, {sum('failed' in r for r in results)} failed"
     )
