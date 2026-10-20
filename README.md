@@ -71,9 +71,11 @@ The first version of the pipeline kept 1305 cases, 24% with an unknown outcome a
 - [x] Processing: civil-register filter, section split with leakage guard, rule-based outcomes (cost orders ignored, outcome from reasons when the sentencja is missing), amounts
 - [x] Expert labelling (`tsl label`, `--disputed`, batches) and scoring (`tsl check-labels`)
 - [x] LLM extraction (prompt-versioned cache, parallel): relevance, party roles, dispute type, claim, defences, neutral summary — from facts only; outcome from the sentencja only
-- [ ] LLM relevance filter over all cases
-- [ ] Similar-case retrieval and outcome prediction baselines (majority · classic ML · LLM · LLM + precedents), temporal split
-- [ ] MCP server
+- [x] Pre-trial conduct features (demand, acknowledgement, partial payment, settlement attempt, timely complaint, delivery accepted without reservations) — `tsl conduct-stats` with Wilson intervals
+- [x] Similar-case retrieval (TF-IDF) and four outcome predictors on a temporal split, with bootstrap CIs and Brier score — `tsl predict-eval`
+- [x] `tsl predict "<facts>"`: probabilities, reasoning and the cited precedents
+- [ ] Results on the full dataset (needs `tsl extract` over all cases)
+- [ ] Hybrid retrieval + reranking from rag-eval-pl; MCP server; demo
 
 ## Quickstart
 
@@ -90,6 +92,10 @@ tsl label                           # expert review, one case at a time (Enter =
 cp .env.example .env                # add ANTHROPIC_API_KEY
 tsl extract --ids-from-labels       # LLM features for the labelled cases
 tsl check-labels                    # now also LLM vs. expert
+tsl extract                         # all cases (parallel, cached)
+tsl predict-eval                    # majority · tfidf · llm · llm-rag on the newest 20%
+tsl conduct-stats                   # does paying part of the debt predict losing the rest?
+tsl predict "Przewoźnik żąda frachtu 4 500 zł, zleceniodawca potrącił karę za opóźnienie…"
 ```
 
 ## Data

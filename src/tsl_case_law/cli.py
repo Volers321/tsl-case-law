@@ -359,6 +359,134 @@ def cmd_extract(args) -> None:
     print(f"Wrote {len(rows)} rows to {EXTRACTED}; {failed} with unparseable answers")
 
 
+def _load_extracted() -> dict[int, dict]:
+    if not EXTRACTED.exists():
+        return {}
+    rows = map(json.loads, EXTRACTED.read_text(encoding="utf-8").splitlines())
+    return {r["id"]: r for r in rows}
+
+
+def _examples():
+    from .predict import build_examples
+
+    extracted = _load_extracted()
+    examples = build_examples(load_cases(), extracted)
+    note = "LLM relevance filter" if extracted else "keyword filter only — run `tsl extract`"
+    print(f"{len(examples)} first-instance TSL cases with a known outcome ({note})")
+    return examples
+
+
+REPORT = Path("data/predict_report.json")
+
+
+def cmd_predict_eval(args) -> None:
+    from . import predict as P
+
+    examples = _examples()
+    train, test = P.temporal_split(examples, args.test_frac)
+    print(
+        f"train {len(train)} ({train[0].date} … {train[-1].date})   "
+        f"test {len(test)} ({test[0].date} … {test[-1].date})"
+    )
+    print(
+        "test labels: " + ", ".join(f"{k}:{v}" for k, v in Counter(e.label for e in test).items())
+    )
+    gold = [e.label for e in test]
+    methods = args.methods.split(",")
+    results, llm = {}, None
+    for m in methods:
+        if m == "majority":
+            probs = P.predict_majority(train, test)
+        elif m == "tfidf":
+            probs = P.predict_tfidf(train, test)
+        elif m in ("llm", "llm-rag"):
+            from .llm import LLM
+
+            llm = llm or LLM.from_env()
+            probs = P.predict_llm(llm, train, test, k=args.k if m == "llm-rag" else 0)
+        else:
+            raise SystemExit(f"unknown method {m!r}")
+        r = P.evaluate(gold, probs) | {"accuracy_ci95": P.bootstrap_ci(gold, probs)}
+        results[m] = r
+    print(f"\n{'method':10s} {'accuracy':>9s} {'95% CI':>13s} {'macro-F1':>9s} {'Brier':>7s}")
+    for m, r in results.items():
+        lo, hi = r["accuracy_ci95"]
+        print(
+            f"{m:10s} {r['accuracy']:9.3f}   [{lo:.2f}, {hi:.2f}] {r['macro_f1']:9.3f} {r['brier']:7.3f}"
+        )
+    print("Brier: 0 = perfect probabilities, lower is better; majority is the bar to beat.")
+    REPORT.write_text(
+        json.dumps(
+            {
+                "n_train": len(train),
+                "n_test": len(test),
+                "split_date": test[0].date,
+                "results": results,
+            },
+            indent=1,
+        ),
+        encoding="utf-8",
+    )
+    print(f"report -> {REPORT}")
+
+
+def cmd_similar(args) -> None:
+    from .predict import LABEL_PL, SimilarCases
+
+    hits = SimilarCases(_examples()).search(args.text, args.k)
+    for e, score in hits:
+        print(f"\n{score:.2f}  {e.case_number} ({e.date})  -> {LABEL_PL[e.label]}")
+        print(f"      {_snip(e.summary, 300)}")
+
+
+def cmd_predict(args) -> None:
+    from . import predict as P
+    from .llm import LLM
+
+    examples = _examples()
+    hits = P.SimilarCases(examples).search(args.text, args.k)
+    llm = LLM.from_env()
+    raw = llm.complete(
+        P.PREDICT_SYSTEM, P.precedents_prompt(hits) + P.case_prompt(args.text), max_tokens=2048
+    )
+    p = P.parse_probs(raw)
+    if not p:
+        raise SystemExit("Could not parse the model's answer:\n" + raw)
+    print("\nSzanse powoda (prognoza, nie porada prawna):")
+    for lab in P.LABELS:
+        print(f"  {P.LABEL_PL[lab]:20s} {p[lab]:5.0%}  " + "█" * round(p[lab] * 30))
+    print(f"\nUzasadnienie: {p['reason']}")
+    cited = {int(x) for x in p["precedents"] if str(x).isdigit()}
+    print("\nPodobne sprawy" + (" (* = powołane przez model)" if cited else "") + ":")
+    for n, (e, score) in enumerate(hits, start=1):
+        mark = "*" if n in cited else " "
+        print(
+            f" {mark}[{n}] {e.case_number} ({e.date[:4]}) {P.LABEL_PL[e.label]:18s} sim {score:.2f}"
+        )
+        print(f"       {_snip(e.summary, 200)}")
+
+
+def cmd_conduct_stats(args) -> None:
+    from .predict import conduct_table, wilson
+
+    examples = _examples()
+    if not any(e.features.get("conduct") for e in examples):
+        raise SystemExit("No conduct features — run `tsl extract` with the current prompt.")
+    base = sum(e.label != "lose" for e in examples) / len(examples)
+    print(f"claimant wins (fully or partly) in {base:.0%} of {len(examples)} cases\n")
+    print(
+        f"{'pre-trial conduct':32s} {'n':>4s} {'claimant wins':>14s} {'95% CI':>13s} {'vs all':>7s}"
+    )
+    for r in conduct_table(examples, min_n=args.min_n):
+        lo, hi = wilson(r["claimant_wins"], r["n"])
+        name = f"{r['feature']} = {'yes' if r['value'] else 'no'}"
+        print(
+            f"{name:32s} {r['n']:4d} {r['claimant_wins']:13.0%}  [{lo:.0%}, {hi:.0%}] "
+            f"{r['vs_base']:+7.0%}"
+        )
+    print("\nCorrelation, not causation; groups overlap; facts as described by the court.")
+
+
 def main(argv: list[str] | None = None) -> None:
     # Show progress immediately even when piped through `tee` (stdout is block-buffered then).
     if hasattr(sys.stdout, "reconfigure"):
@@ -407,6 +535,26 @@ def main(argv: list[str] | None = None) -> None:
     e.add_argument("--ids-from-labels", action="store_true", help="only cases in the label sheet")
     e.add_argument("--workers", type=int, default=6, help="parallel API calls")
     e.set_defaults(func=cmd_extract)
+
+    pe = sub.add_parser("predict-eval", help="compare outcome predictors on the newest cases")
+    pe.add_argument("--methods", default="majority,tfidf,llm,llm-rag")
+    pe.add_argument("--test-frac", type=float, default=0.2)
+    pe.add_argument("-k", type=int, default=5, help="precedents for llm-rag")
+    pe.set_defaults(func=cmd_predict_eval)
+
+    si = sub.add_parser("similar", help="find similar past cases for a description")
+    si.add_argument("text")
+    si.add_argument("-k", type=int, default=5)
+    si.set_defaults(func=cmd_similar)
+
+    pr = sub.add_parser("predict", help="estimate the outcome of a described dispute")
+    pr.add_argument("text", help="facts of the dispute, in Polish")
+    pr.add_argument("-k", type=int, default=5)
+    pr.set_defaults(func=cmd_predict)
+
+    cs = sub.add_parser("conduct-stats", help="claimant win rate by pre-trial conduct")
+    cs.add_argument("--min-n", type=int, default=8)
+    cs.set_defaults(func=cmd_conduct_stats)
 
     args = p.parse_args(argv)
     args.func(args)
