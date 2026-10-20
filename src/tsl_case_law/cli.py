@@ -238,6 +238,21 @@ def cmd_check_labels(args) -> None:
         print(f"  LLM:   {_acc(pairs)}")
         rel = [(llm[i]["facts_llm"].get("is_tsl", False), i in tsl) for i in labels if i in llm]
         print(f"\nLLM relevance (is_tsl) agreement: {_acc(rel)}")
+        tp = sum(p and g for p, g in rel)
+        fp = sum(p and not g for p, g in rel)
+        fn = sum(g and not p for p, g in rel)
+        print(f"  LLM said TSL: {tp + fp} (correct {tp}); missed TSL cases: {fn}")
+        print(f"  precision {tp / max(tp + fp, 1):.0%}, recall {tp / max(tp + fn, 1):.0%}")
+        disagree = [
+            i for i in labels if i in llm and llm[i]["facts_llm"].get("is_tsl") != (i in tsl)
+        ]
+        if disagree:
+            print("\nLLM vs expert on relevance (LLM summary of the facts):")
+        for i in disagree:
+            f = llm[i]["facts_llm"]
+            who = "LLM: TSL, expert: no" if f.get("is_tsl") else "LLM: no, expert: TSL"
+            num = cases.get(i, {}).get("case_number", i)
+            print(f"  {num} [{who}] {f.get('dispute_type')}: {_snip(f.get('summary', ''), 260)}")
         typed = [
             (llm[i]["facts_llm"].get("dispute_type"), labels[i]["dispute_type"])
             for i in tsl
