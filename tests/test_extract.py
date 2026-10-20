@@ -95,3 +95,11 @@ def test_extract_all_caches_per_prompt_version(tmp_path):
     again = extract_all(llm, [CASE], tmp_path, progress=lambda m: None)
     assert len(llm.calls) == 4, "second run must come from cache"
     assert again[0] == json.loads((tmp_path / PROMPT_VERSION / "1.json").read_text())
+
+
+def test_conduct_is_tri_state_and_tolerates_garbage():
+    v = validate_facts({"conduct": {"partial_payment": True, "acknowledged_debt": "tak"}})
+    assert v["conduct"]["partial_payment"] is True
+    assert v["conduct"]["acknowledged_debt"] is None, "non-boolean -> unknown, not a guess"
+    assert set(v["conduct"]) >= {"settlement_attempt", "complaint_timely"}
+    assert validate_facts({"conduct": "brak"})["conduct"]["pretrial_demand"] is None

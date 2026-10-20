@@ -49,6 +49,14 @@ Dostajesz WYŁĄCZNIE opis stanu faktycznego z uzasadnienia wyroku. Zwróć jede
   "claim_amount": liczba lub null,
   "claim_currency": "PLN" / "EUR" / null,
   "defences": lista z {list(DEFENCES)},
+  "conduct": {{                          // zachowanie stron PRZED procesem; true/false/null
+    "pretrial_demand": ...,             // powód wezwał do zapłaty przed pozwem
+    "acknowledged_debt": ...,           // pozwany uznał dług / obiecał zapłatę / prosił o raty
+    "partial_payment": ...,             // pozwany zapłacił część kwoty
+    "settlement_attempt": ...,          // strony próbowały ugody lub mediacji
+    "complaint_timely": ...,            // reklamacja / zastrzeżenia zgłoszone w terminie
+    "accepted_without_reservations": ... // przesyłkę odebrano bez zastrzeżeń
+  }},
   "summary": "neutralne streszczenie faktów, maks. 80 słów"
 }}
 DEFINICJA TSL: is_tsl = true tylko dla sporów z umowy przewozu TOWARÓW (krajowego lub CMR),
@@ -58,6 +66,7 @@ is_tsl = false m.in. dla: przewozu osób (bilety, opłaty dodatkowe za jazdę be
 wypadki pasażerów, opóźnienia lotów i pociągów), sprzedaży, leasingu, najmu lub naprawy
 pojazdów, sporów pracowniczych kierowców, zamówień publicznych i podatków — nawet jeśli
 w tekście pojawiają się słowa "przewoźnik", "transport" albo "Prawo przewozowe".
+CONDUCT: null, gdy tekst o tym milczy lub punkt nie dotyczy sprawy — nie zgaduj.
 ZASADY: nie opisuj, jak orzekł sąd w tej sprawie, i nie oceniaj, kto ma rację — streszczenie
 ma zawierać tylko fakty i stanowiska stron. Jeśli czegoś nie da się ustalić, użyj null lub "inny"."""
 
@@ -93,6 +102,21 @@ def _choice(value, allowed: tuple[str, ...], default: str) -> str:
     return value if value in allowed else default
 
 
+CONDUCT = (
+    "pretrial_demand",
+    "acknowledged_debt",
+    "partial_payment",
+    "settlement_attempt",
+    "complaint_timely",
+    "accepted_without_reservations",
+)
+
+
+def _tri(value) -> bool | None:
+    """true / false / null — anything else (e.g. "nie wiadomo") counts as unknown."""
+    return value if isinstance(value, bool) else None
+
+
 def validate_facts(d: dict) -> dict:
     """Coerce the model's answer into the schema; anything off-list becomes a default."""
     amount = d.get("claim_amount")
@@ -111,6 +135,10 @@ def validate_facts(d: dict) -> dict:
         if d.get("claim_currency") in ("PLN", "EUR")
         else None,
         "defences": [x for x in d.get("defences") or [] if x in DEFENCES],
+        "conduct": {
+            k: _tri((d.get("conduct") if isinstance(d.get("conduct"), dict) else {}).get(k))
+            for k in CONDUCT
+        },
         "summary": str(d.get("summary") or "")[:1200],
     }
 
