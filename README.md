@@ -100,7 +100,7 @@ Share of first-instance cases in which the claimant won at least partly (all cas
 | attempt to settle | 42 | 62% | 47–75% |
 | partial payment made | 86 | 70% | 59–78% |
 
-The striking "late complaint → claimant wins 90%" makes sense once roles are considered: the typical claimant here is a **carrier suing for freight**, and a shipper who did not complain in time about damage cannot set it off. Conduct features only mean something **relative to who is suing whom** — the next version of the table splits by claimant role. Correlation, not causation; small groups, overlapping categories.
+The striking "late complaint → claimant wins 90%" is counter-intuitive. A likely explanation (a hypothesis, not yet checked) is party roles: if the claimant is a **carrier suing for freight**, a shipper who did not complain about damage in time cannot set it off. Conduct features only mean something **relative to who is suing whom** — the next version of the table splits by claimant role. Correlation, not causation; small groups, overlapping categories.
 
 ## Status
 
