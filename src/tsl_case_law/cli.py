@@ -272,7 +272,9 @@ def cmd_check_labels(args) -> None:
     for i in not_tsl:
         c = cases[i]
         regs = "; ".join(r[:40] for r in c.get("regulations", [])[:2])
-        print(f"  {c['case_number']} (score {c['tsl_score']:.0f}) {_snip(c['facts'], 160)}")
+        print(
+            f"  {c['case_number']} (score {c.get('tsl_score', 0):.0f}) {_snip(c.get('facts', ''), 160)}"
+        )
         if regs:
             print(f"      regulations: {regs}")
 
