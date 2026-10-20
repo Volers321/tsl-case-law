@@ -203,7 +203,7 @@ YES = {"tak", "t", "yes", "y", "1", "true"}
 def _gold_outcome(label: dict, case: dict) -> str | None:
     """Expert's outcome: the rule's label if they confirmed it, else what they wrote."""
     if label["outcome_rule_ok"].lower() in YES:
-        return case.get("outcome_rule")
+        return label.get("shown_outcome") or case.get("outcome_rule")
     return label["outcome_gold"].upper() or None
 
 

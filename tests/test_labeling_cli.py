@@ -59,6 +59,7 @@ def test_label_roundtrip_semicolon_and_comma(tmp_path):
             "outcome_gold": "PARTIAL",
             "notes": "",
             "batch": 1,
+            "shown_outcome": "",
         }
     }
 
@@ -153,6 +154,7 @@ def test_interactive_labelling_saves_and_resumes(tmp_path):
         "outcome_gold": "",
         "notes": "",
         "batch": 1,
+        "shown_outcome": "GRANTED",
     }
     assert labels[cases[1]["id"]]["is_tsl"] == "nie"
     # resume: only case 3 is asked; rule wrong -> pick the correct outcome (3 = DISMISSED)
@@ -201,3 +203,8 @@ def test_sample_add_appends_new_batch_and_keeps_labels(tmp_path, monkeypatch):
     labels = read_labels(cli.LABEL_SHEET)
     assert len(labels) == 3 and {lab["batch"] for lab in labels.values()} == {1}
     assert sum(r["batch"] == "2" and not r["is_tsl"] for r in rows) == 4
+
+
+def test_confirmed_outcome_is_frozen_when_rules_change():
+    label = {"outcome_rule_ok": "tak", "outcome_gold": "", "shown_outcome": "GRANTED"}
+    assert cli._gold_outcome(label, {"outcome_rule": "PARTIAL"}) == "GRANTED"

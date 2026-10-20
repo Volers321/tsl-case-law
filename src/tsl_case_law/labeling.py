@@ -118,6 +118,8 @@ def read_labels(path: str | Path) -> dict[int, dict]:
             continue  # not labelled yet
         labels[int(row["id"])] = {k: (row.get(k) or "").strip() for k in EXPERT_COLUMNS}
         labels[int(row["id"])]["batch"] = int((row.get("batch") or "1").strip() or 1)
+        # The outcome the expert saw and confirmed — rules may change later.
+        labels[int(row["id"])]["shown_outcome"] = (row.get("outcome_rule") or "").strip()
     return labels
 
 
