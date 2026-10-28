@@ -48,7 +48,16 @@ class LLM:
         part of the budget on internal reasoning before answering), retry once with double
         the budget. ``self.last_truncated`` tells callers whether the text is still cut."""
         for budget in (max_tokens, max_tokens * 2):
-            text, truncated = self._call(system, user, budget)
+            try:
+                text, truncated = self._call(system, user, budget)
+            except Exception as e:  # provider SDKs raise their own AuthenticationError
+                if type(e).__name__ in ("AuthenticationError", "PermissionDeniedError"):
+                    raise SystemExit(
+                        f"\nAPI key rejected ({type(e).__name__}). The key in .env is invalid, "
+                        "deleted or disabled — create a new one in the provider console, put it "
+                        "in .env and run the same command again (finished work is cached)."
+                    ) from None
+                raise
             if not truncated:
                 break
         self.last_truncated = truncated

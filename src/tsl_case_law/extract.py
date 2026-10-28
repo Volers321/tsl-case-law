@@ -216,6 +216,9 @@ def extract_all(
             rows[row["id"]] = row
             if n % 25 == 0 or n == len(todo):
                 progress(f"extracted {n}/{len(todo)}")
+    except SystemExit:  # e.g. rejected API key: stop at once instead of failing every case
+        pool.shutdown(wait=False, cancel_futures=True)
+        raise
     except KeyboardInterrupt:
         pool.shutdown(wait=False, cancel_futures=True)
         progress("\nStopped. Finished cases are cached; run the same command to resume.")

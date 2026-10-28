@@ -272,6 +272,9 @@ def predict_llm(
     pool = ThreadPoolExecutor(max_workers=max(1, workers))  # no `with`: see extract_all
     try:
         results = list(pool.map(one, test))
+    except SystemExit:  # e.g. rejected API key: stop at once instead of failing every case
+        pool.shutdown(wait=False, cancel_futures=True)
+        raise
     except KeyboardInterrupt:
         pool.shutdown(wait=False, cancel_futures=True)
         progress("\nStopped. Finished predictions are cached; run again to resume.")
