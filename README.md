@@ -8,7 +8,7 @@
 
 **Key results** (details below)
 
-- **1080** civil judgments from SAOS → **675** TSL judgments after an LLM relevance filter that agreed with a TSL practitioner on 30/30 labelled cases (optimistic, explained below)
+- **1079** civil judgments from SAOS → **675** TSL judgments after an LLM relevance filter that agreed with a TSL practitioner on 30/30 labelled cases (optimistic, explained below)
 - Outcome prediction on the **73 newest cases**: TF-IDF + logistic regression **0.40** accuracy vs 0.27 majority; LLM variants 0.34–0.38, **within their own run-to-run noise**
 - **34%** of appealed TSL judgments are changed or set aside (279 appeals; 54% in forwarder-liability disputes)
 - Case-law commentary written from the judgments: **95%** of cited provisions found in the judgment text, **39/39** case-number citations valid
@@ -43,7 +43,7 @@ SAOS API ──► download ──► build ────────────
 
 ### Dataset
 
-1492 judgments downloaded from SAOS (2015–2026) → **1080 civil/commercial cases** after processing:
+1492 judgments downloaded from SAOS (2015–2026) → **1079 civil/commercial cases** after processing (1 duplicate dropped later):
 
 | Step | Dropped | Why |
 |---|---:|---|
