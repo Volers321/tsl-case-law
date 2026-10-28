@@ -6,6 +6,13 @@
 
 ![CI](https://github.com/Volers321/tsl-case-law/actions/workflows/ci.yml/badge.svg)
 
+**Key results** (details below)
+
+- **1080** civil judgments from SAOS → **675** TSL judgments after an LLM relevance filter that agreed with a TSL practitioner on 30/30 labelled cases (optimistic, explained below)
+- Outcome prediction on the **73 newest cases**: TF-IDF + logistic regression **0.40** accuracy vs 0.27 majority; LLM variants 0.34–0.38, **within their own run-to-run noise**
+- **34%** of appealed TSL judgments are changed or set aside (279 appeals; 54% in forwarder-liability disputes)
+- Case-law commentary written from the judgments: **95%** of cited provisions found in the judgment text, **39/39** case-number citations valid
+
 > ⚠️ Decision support for businesses assessing a dispute — **not** legal advice and not a tool for courts. AI used by judicial authorities to research and interpret facts and law is a high-risk category under the EU AI Act; this project deliberately stays on the side of parties estimating their chances.
 
 ## Why this project
@@ -67,14 +74,19 @@ The first version of the pipeline kept 1305 cases, 24% with an unknown outcome a
 
 ### Outcome prediction (first instance, temporal split)
 
-365 first-instance cases that the LLM classed as TSL and whose outcome is known. Methods learn from / retrieve among **292 judgments up to April 2021** and are tested on the **73 newest (May 2021 – April 2026)**. The model sees only the facts section.
+363 first-instance cases that the LLM classed as TSL, whose outcome is known and which were not changed on appeal. Methods learn from / retrieve among **290 judgments up to April 2021** and are tested on the **73 newest (May 2021 – April 2026)**. The model sees only the facts section. Final run: LLM methods averaged over 3 runs.
 
-| Method | Accuracy (3 classes) | 95% CI | Macro-F1 | Brier ↓ |
-|---|---:|---:|---:|---:|
-| majority class | 0.274 | 0.18–0.37 | 0.143 | 0.724 |
-| TF-IDF + logistic regression | **0.411** | 0.30–0.52 | **0.406** | **0.652** |
-| LLM (`claude-haiku-5-5`), facts summary | 0.397 | 0.29–0.51 | 0.394 | 0.696 |
-| LLM + 5 similar earlier judgments | 0.342 | 0.23–0.44 | 0.339 | 0.703 |
+| Method | Accuracy (3 classes) | 95% CI | Macro-F1 | Brier ↓ | Single runs: min – max |
+|---|---:|---:|---:|---:|---:|
+| majority class | 0.274 | 0.18–0.37 | 0.143 | 0.724 | — |
+| **TF-IDF + logistic regression** | **0.397** | 0.27–0.51 | **0.385** | **0.652** | — |
+| LLM (`claude-haiku-5-5`), facts summary | 0.384 | 0.27–0.49 | 0.381 | 0.689 | 0.329 – 0.384 |
+| LLM + 5 similar earlier judgments | 0.342 | 0.23–0.45 | 0.326 | 0.707 | 0.288 – 0.411 |
+| LLM + 5 precedents chosen by legal issue, with holdings | 0.370 | 0.26–0.48 | 0.359 | 0.721 | 0.329 – 0.411 |
+
+On the validation split (58 cases, 2019–2021) the issue-based variant had looked best (0.517, Brier 0.584). It was fixed as "our method" before the test run — and on the test period it did not beat the others.
+
+**Bottom line.** Everything beats the majority baseline; nothing beats a plain TF-IDF logistic regression, which is also the best calibrated. The three LLM variants are within each other's run-to-run spread (5–12 points), so none can be called better. Predicting a court's ruling from 365 descriptions of facts has a low ceiling. What the LLM adds here is not accuracy but **explanation**: cited precedents, their holdings and a readable reasoning.
 
 **Reading the table honestly**
 
@@ -148,8 +160,9 @@ The remaining 5% of provisions are not found verbatim — they may be paraphrase
 - [x] Results on the full dataset (above)
 - [x] Case-law commentary from the judgments themselves: a note per judgment (holding, arguments, provisions, practical takeaway) — `tsl annotate`; issue overviews with case-number citations — `tsl commentary "<zagadnienie>"`; provisions and citations checked automatically
 - [x] Appeal linking: each first-instance judgment is matched to the appeal against it (signature + lower-court city, appeal must postdate it); judgments **changed or set aside on appeal are excluded** from training, testing, precedents and overviews, upheld ones are marked as confirmed — `tsl appeals` reports reversal rates by court and dispute type
-- [ ] Does commentary improve prediction? `llm-rag-issue` retrieves precedents by legal issue and shows their holdings — measure on `--dev`, then test
-- [ ] Retrieval by legal issue (dense + rerank from rag-eval-pl, same dispute type), calibration, conduct by claimant role — developed on the validation split
+- [x] Does commentary improve prediction? Better on validation, not on test — reported above; its value is explanation
+- [x] Run-to-run variance of LLM methods measured (`--repeats`)
+- [ ] Next: calibration of LLM probabilities, conduct statistics by claimant role, dense retrieval from rag-eval-pl
 - [ ] FastAPI + Docker, MCP server, demo
 
 ## Quickstart
