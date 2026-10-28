@@ -113,6 +113,7 @@ The striking "late complaint → claimant wins 90%" is counter-intuitive. A like
 - [x] `tsl predict "<facts>"`: probabilities, reasoning and the cited precedents
 - [x] Results on the full dataset (above)
 - [x] Case-law commentary from the judgments themselves: a note per judgment (holding, arguments, provisions, practical takeaway) — `tsl annotate`; issue overviews with case-number citations — `tsl commentary "<zagadnienie>"`; provisions and citations checked automatically
+- [x] Appeal linking: each first-instance judgment is matched to the appeal against it (signature + lower-court city, appeal must postdate it); judgments **changed or set aside on appeal are excluded** from training, testing, precedents and overviews, upheld ones are marked as confirmed — `tsl appeals` reports reversal rates by court and dispute type
 - [ ] Does commentary improve prediction? `llm-rag-issue` retrieves precedents by legal issue and shows their holdings — measure on `--dev`, then test
 - [ ] Retrieval by legal issue (dense + rerank from rag-eval-pl, same dispute type), calibration, conduct by claimant role — developed on the validation split
 - [ ] FastAPI + Docker, MCP server, demo
@@ -135,6 +136,7 @@ tsl check-labels                    # now also LLM vs. expert
 tsl extract                         # all cases (parallel, cached)
 tsl predict-eval                    # majority · tfidf · llm · llm-rag on the newest 20%
 tsl conduct-stats                   # does paying part of the debt predict losing the rest?
+tsl appeals                         # link judgments to appeals, reversal rates; reversed ones excluded
 tsl annotate                        # commentary note per TSL judgment (holding, provisions, tip)
 tsl commentary "przedawnienie roszczeń z umowy przewozu"   # case-law overview with citations
 tsl predict "Przewoźnik żąda frachtu 4 500 zł, zleceniodawca potrącił karę za opóźnienie…"

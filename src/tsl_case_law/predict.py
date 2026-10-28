@@ -43,6 +43,7 @@ class Example:
     label: str
     features: dict = field(default_factory=dict)
     note: dict | None = None  # commentary written from the court's reasoning (precedents only)
+    appeal: str = "not_found"  # upheld / changed / set_aside / not_found (see appeals.py)
 
     def feature_tokens(self) -> str:
         """Structured features as pseudo-words, so one TF-IDF model can use both."""
@@ -65,15 +66,26 @@ def gold_outcome(case: dict, extracted: dict | None) -> str:
 
 
 def build_examples(
-    cases: list[dict], extracted: dict[int, dict], notes: dict[int, dict] | None = None
+    cases: list[dict],
+    extracted: dict[int, dict],
+    notes: dict[int, dict] | None = None,
+    links: dict[int, dict] | None = None,
+    *,
+    drop_reversed: bool = True,
 ) -> list[Example]:
     """First-instance TSL cases with a known win / partial / lose outcome, oldest first.
 
     Without LLM extraction every case is kept (keyword filter only); with it, only cases
-    the LLM classed as TSL.
+    the LLM classed as TSL. With appeal ``links``, judgments changed or set aside on appeal
+    are dropped (their outcome is not the final one) unless ``drop_reversed`` is False.
     """
+    from .appeals import REVERSED, appeal_status
+
     out = []
     for c in cases:
+        status = appeal_status(c["id"], links or {})
+        if drop_reversed and status in REVERSED:
+            continue
         ext = extracted.get(c["id"])
         facts_llm = (ext or {}).get("facts_llm") or {}
         if extracted and not facts_llm.get("is_tsl"):
@@ -96,6 +108,7 @@ def build_examples(
                 note=(notes or {}).get(c["id"])
                 if (notes or {}).get(c["id"], {}).get("ok")
                 else None,
+                appeal=status,
             )
         )
     return sorted(out, key=lambda e: e.date)
@@ -207,7 +220,11 @@ def precedents_prompt(hits: list[tuple[Example, float]], with_notes: bool = Fals
         return ""
     blocks = []
     for n, (e, _) in enumerate(hits, start=1):
-        block = f"[{n}] {e.case_number} ({e.date[:4]}) — wynik: {LABEL_PL[e.label]}\n{e.summary}"
+        upheld = ", utrzymany w apelacji" if e.appeal == "upheld" else ""
+        block = (
+            f"[{n}] {e.case_number} ({e.date[:4]}{upheld}) — wynik: {LABEL_PL[e.label]}\n"
+            f"{e.summary}"
+        )
         if with_notes and e.note:
             block += f"\nTeza sądu: {e.note['teza']}"
         blocks.append(block)

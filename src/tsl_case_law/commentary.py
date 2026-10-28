@@ -171,24 +171,46 @@ def note_text(note: dict) -> str:
 class NoteIndex:
     """TF-IDF over notes, to find the judgments that deal with a given legal issue."""
 
-    def __init__(self, cases: dict[int, dict], notes: list[dict]):
+    def __init__(
+        self, cases: dict[int, dict], notes: list[dict], links: dict[int, dict] | None = None
+    ):
+        """Judgments changed or set aside on appeal (``links``) are left out: an overview
+        should not present a reversed ruling as the courts' view."""
         from sklearn.feature_extraction.text import TfidfVectorizer
 
-        self.items = [(cases[n["id"]], n) for n in notes if n.get("ok") and n["id"] in cases]
+        from .appeals import REVERSED, appeal_status
+
+        self.links = links or {}
+        self.items = [
+            (cases[n["id"]], n)
+            for n in notes
+            if n.get("ok")
+            and n["id"] in cases
+            and appeal_status(n["id"], self.links) not in REVERSED
+        ]
+        if not self.items:
+            raise SystemExit("No usable notes (all failed or reversed on appeal).")
         self.vec = TfidfVectorizer(ngram_range=(1, 2), sublinear_tf=True)
         self.matrix = self.vec.fit_transform([note_text(n) for _, n in self.items])
 
     def search(self, query: str, k: int = 12, min_score: float = 0.05):
         sims = (self.matrix @ self.vec.transform([query]).T).toarray().ravel()
         order = sims.argsort()[::-1][:k]
-        return [(*self.items[i], float(sims[i])) for i in order if sims[i] >= min_score]
+        from .appeals import appeal_status
+
+        hits = [(*self.items[i], float(sims[i])) for i in order if sims[i] >= min_score]
+        for case, note, _ in hits:
+            note["_appeal"] = appeal_status(case["id"], self.links)
+        return hits
 
 
 def overview_input(issue: str, hits) -> str:
     blocks = []
     for case, note, _ in hits:
+        upheld = " (utrzymany w apelacji)" if note.get("_appeal") == "upheld" else ""
         blocks.append(
-            f"[{case['case_number']}] {case.get('court', '')}, {case.get('date', '')[:10]}\n"
+            f"[{case['case_number']}] {case.get('court', '')}, {case.get('date', '')[:10]}"
+            f"{upheld}\n"
             f"Teza: {note['teza']}\nArgumenty: {'; '.join(note['argumenty'])}\n"
             f"Przepisy: {', '.join(note['przepisy'])}"
         )

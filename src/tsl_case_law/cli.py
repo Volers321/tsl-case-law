@@ -27,6 +27,7 @@ IDS = RAW / "_ids.json"
 LABEL_SHEET = Path("data/labels/sample.csv")
 EXTRACTED = Path("data/extracted.jsonl")
 NOTES = Path("data/commentary.jsonl")
+APPEALS = Path("data/appeals.json")
 
 
 def load_cases(path: Path = CASES) -> list[dict]:
@@ -374,12 +375,28 @@ def _load_notes() -> dict[int, dict]:
     return {r["id"]: r for r in rows}
 
 
-def _examples():
+def _load_links() -> dict[int, dict]:
+    if not APPEALS.exists():
+        return {}
+    return {int(k): v for k, v in json.loads(APPEALS.read_text(encoding="utf-8")).items()}
+
+
+def _examples(keep_reversed: bool = False):
     from .predict import build_examples
 
     extracted = _load_extracted()
-    examples = build_examples(load_cases(), extracted, _load_notes())
+    links = _load_links()
+    cases = load_cases()
+    examples = build_examples(
+        cases, extracted, _load_notes(), links, drop_reversed=not keep_reversed
+    )
     note = "LLM relevance filter" if extracted else "keyword filter only — run `tsl extract`"
+    if links:
+        everything = build_examples(cases, extracted, None, links, drop_reversed=False)
+        dropped = len(everything) - len(examples)
+        note += f"; {dropped} changed/set aside on appeal excluded" if dropped else ""
+    else:
+        note += "; appeals not linked — run `tsl appeals`"
     print(f"{len(examples)} first-instance TSL cases with a known outcome ({note})")
     return examples
 
@@ -390,7 +407,7 @@ REPORT = Path("data/predict_report.json")
 def cmd_predict_eval(args) -> None:
     from . import predict as P
 
-    examples = _examples()
+    examples = _examples(keep_reversed=args.keep_reversed)
     train, test = P.temporal_split(examples, args.test_frac)
     if args.dev:
         # Development runs never touch the test period: the newest part of the training
@@ -463,7 +480,8 @@ def cmd_similar(args) -> None:
 
     hits = SimilarCases(_examples()).search(args.text, args.k)
     for e, score in hits:
-        print(f"\n{score:.2f}  {e.case_number} ({e.date})  -> {LABEL_PL[e.label]}")
+        mark = "  ✓ utrzymany w apelacji" if e.appeal == "upheld" else ""
+        print(f"\n{score:.2f}  {e.case_number} ({e.date})  -> {LABEL_PL[e.label]}{mark}")
         print(f"      {_snip(e.summary, 300)}")
         if e.note:
             print(f"      Teza: {e.note['teza']}")
@@ -494,8 +512,10 @@ def cmd_predict(args) -> None:
     print("\nPodobne sprawy" + (" (* = powołane przez model)" if cited else "") + ":")
     for n, (e, score) in enumerate(hits, start=1):
         mark = "*" if n in cited else " "
+        upheld = " ✓ apelacja oddalona" if e.appeal == "upheld" else ""
         print(
-            f" {mark}[{n}] {e.case_number} ({e.date[:4]}) {P.LABEL_PL[e.label]:18s} sim {score:.2f}"
+            f" {mark}[{n}] {e.case_number} ({e.date[:4]}) {P.LABEL_PL[e.label]:18s} "
+            f"sim {score:.2f}{upheld}"
         )
         print(f"       {_snip(e.summary, 200)}")
         if e.note:
@@ -558,7 +578,8 @@ def cmd_commentary(args) -> None:
     if not notes:
         raise SystemExit("No commentary yet — run `tsl annotate` first.")
     cases = {c["id"]: c for c in load_cases()}
-    result = overview(LLM.from_env(), args.issue, NoteIndex(cases, notes), k=args.n)
+    index = NoteIndex(cases, notes, _load_links())
+    result = overview(LLM.from_env(), args.issue, index, k=args.n)
     if not result["hits"]:
         raise SystemExit("No judgments found for this issue — try other words.")
     print(f"\nPRZEGLĄD ORZECZNICTWA: {args.issue}\n")
@@ -576,6 +597,58 @@ def cmd_commentary(args) -> None:
     if chk["invalid"]:
         print(f"  ⚠ sygnatury spoza listy (możliwe halucynacje): {', '.join(chk['invalid'])}")
     print("To nie jest porada prawna; komentarz powstał automatycznie z treści wyroków.")
+
+
+def cmd_appeals(args) -> None:
+    from .appeals import REVERSED, appeal_status, link_appeals, reversal_stats
+    from .predict import gold_outcome
+
+    cases = load_cases()
+    extracted = _load_extracted()
+    links = link_appeals(cases, outcome_of=lambda c: gold_outcome(c, extracted.get(c["id"])))
+    APPEALS.write_text(json.dumps(links, ensure_ascii=False, indent=1), encoding="utf-8")
+    n_appeals = sum(c["instance"] == "appeal" for c in cases)
+    print(f"{n_appeals} appellate judgments; {len(links)} linked to a first-instance case here")
+    print(f"links -> {APPEALS}")
+
+    def is_tsl(c):
+        return (extracted.get(c["id"], {}).get("facts_llm") or {}).get("is_tsl", True)
+
+    tsl_cases = [c for c in cases if is_tsl(c)]
+
+    def level(c):
+        return "Sąd Rejonowy" if "Rejonow" in c.get("court", "") else "Sąd Okręgowy"
+
+    def dispute(c):
+        return (extracted.get(c["id"], {}).get("facts_llm") or {}).get("dispute_type") or "—"
+
+    header = (
+        f"  {'group':28s} {'appealed':>8s} {'upheld':>7s} {'changed':>8s} "
+        f"{'set aside':>10s} {'reversed':>9s}"
+    )
+    for title, key in (("all TSL", None), ("by court", level), ("by dispute type", dispute)):
+        print(f"\n{title}:\n{header}")
+        stats = reversal_stats(tsl_cases, links, key)
+        for g, r in sorted(stats.items(), key=lambda kv: -kv[1]["appealed"]):
+            if r["appealed"] < (1 if key is None else args.min_n):
+                continue
+            rate = f"{r['reversal_rate']:.0%}" if r["reversal_rate"] is not None else "—"
+            print(
+                f"  {g:28s} {r['appealed']:8d} {r.get('upheld', 0):7d} {r.get('changed', 0):8d} "
+                f"{r.get('set_aside', 0):10d} {rate:>9s}"
+            )
+    print(
+        "\n'not_found' does not mean final: many appeals are not published in SAOS, so the\n"
+        "reversal rate is measured on the appealed cases we can see, not on all judgments."
+    )
+    reversed_ = [c for c in tsl_cases if appeal_status(c["id"], links) in REVERSED]
+    if reversed_:
+        print("\nexamples of reversed judgments (excluded from prediction and precedents):")
+    for c in reversed_[:5]:
+        link = links[c["id"]]
+        print(
+            f"  {c['case_number']} ({c['court']}) -> {link['status']} by {link['appeal_case_number']}"
+        )
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -632,6 +705,9 @@ def main(argv: list[str] | None = None) -> None:
     pe.add_argument("--test-frac", type=float, default=0.2)
     pe.add_argument("-k", type=int, default=5, help="precedents for llm-rag")
     pe.add_argument("--dev", action="store_true", help="evaluate on a validation split instead")
+    pe.add_argument(
+        "--keep-reversed", action="store_true", help="keep judgments changed/set aside on appeal"
+    )
     pe.set_defaults(func=cmd_predict_eval)
 
     si = sub.add_parser("similar", help="find similar past cases for a description")
@@ -647,6 +723,10 @@ def main(argv: list[str] | None = None) -> None:
     cs = sub.add_parser("conduct-stats", help="claimant win rate by pre-trial conduct")
     cs.add_argument("--min-n", type=int, default=8)
     cs.set_defaults(func=cmd_conduct_stats)
+
+    ap = sub.add_parser("appeals", help="link judgments to their appeals; reversal rates")
+    ap.add_argument("--min-n", type=int, default=5, help="smallest group to show")
+    ap.set_defaults(func=cmd_appeals)
 
     an = sub.add_parser("annotate", help="LLM commentary note for every TSL judgment")
     an.add_argument("--limit", type=int)
