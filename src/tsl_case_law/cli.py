@@ -592,7 +592,7 @@ def cmd_commentary(args) -> None:
     chk = result["check"]
     print(
         f"\nKontrola cytowań: {chk['valid']}/{chk['citations']} sygnatur z listy, "
-        f"{chk['distinct_cases']} różnych wyroków, akapity z cytowaniem {chk['paragraphs_with_citation']}"
+        f"{chk['distinct_cases']} różnych wyroków, twierdzenia z cytowaniem {chk['claims_with_citation']}"
     )
     if chk["invalid"]:
         print(f"  ⚠ sygnatury spoza listy (możliwe halucynacje): {', '.join(chk['invalid'])}")

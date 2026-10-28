@@ -102,6 +102,20 @@ Share of first-instance cases in which the claimant won at least partly (all cas
 
 The striking "late complaint → claimant wins 90%" is counter-intuitive. A likely explanation (a hypothesis, not yet checked) is party roles: if the claimant is a **carrier suing for freight**, a shipper who did not complain about damage in time cannot set it off. Conduct features only mean something **relative to who is suing whom** — the next version of the table splits by claimant role. Correlation, not causation; small groups, overlapping categories.
 
+### Case-law commentary
+
+Commentaries and glosses in Lex/Legalis are copyrighted; judgments are not. So `tsl annotate` writes a note for each of the **675 TSL judgments** from the court's own reasoning — holding, key arguments, provisions relied on, a practical takeaway — and `tsl commentary "<issue>"` turns the notes into a case-law overview in which every claim cites a case number.
+
+| Automatic check | Result |
+|---|---|
+| Provisions in the notes that literally appear in the judgment text | **4208 / 4439 (95%)** |
+| Case numbers cited in two overviews ("przedawnienie roszczeń z umowy przewozu", "odpowiedzialność przewoźnika za szkodę w ładunku CMR") that belong to the judgments supplied | **39 / 39**, 0 invented |
+| Claims in those overviews backed by at least one citation | **20 / 20** |
+
+*A bug the real output exposed:* the first version of the citation check flagged 9 "hallucinated" case numbers in the first overview. All were genuine — the model had put several in one bracket (`[V GC 388/14; IX GC 1392/16]`) and the checker read the bracket as a single unknown number. The checker had a false-alarm problem, not the model; it now splits brackets and has a regression test built from that output.
+
+The remaining 5% of provisions are mostly paraphrases ("art. 32 CMR" written as "Konwencja CMR, art. 32 ust. 1 lit. c") but can also be invented — the per-note flag (`przepisy_grounded`) lets the UI show unverified ones differently.
+
 ## Status
 
 - [x] SAOS client: topical searches, full-judgment download, resumable, retries, polite rate limiting

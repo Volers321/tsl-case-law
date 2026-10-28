@@ -217,23 +217,44 @@ def overview_input(issue: str, hits) -> str:
     return f"ZAGADNIENIE: {issue}\n\nWYROKI:\n\n" + "\n\n".join(blocks)
 
 
-_CITE = re.compile(r"\[([^\[\]]{3,40}?)\]")
+_BRACKET = re.compile(r"\[([^\[\]]{3,300})\]")
+_LOOKS_LIKE_SIG = re.compile(r"\d+\s*/\s*\d+")
+_HEADING = re.compile(r"^[#*\s\d.]*[^.]{0,80}[:*]*$")
+_DISCLAIMER = re.compile(r"^[*_\s]*(to nie jest porada|ograniczeni|zastrzeżeni)", re.IGNORECASE)
+
+
+def cited_signatures(text: str) -> list[str]:
+    """Case numbers in square brackets; one bracket may hold several, e.g.
+    "[V GC 388/14; IX GC 1392/16]". Non-signatures such as "[1]" are ignored."""
+    out = []
+    for inner in _BRACKET.findall(text):
+        for part in re.split(r"[;,]", inner):
+            part = " ".join(part.split())
+            if _LOOKS_LIKE_SIG.search(part):
+                out.append(re.sub(r"\s*/\s*", "/", part))
+    return out
 
 
 def check_citations(text: str, allowed: set[str]) -> dict:
-    """Every [case number] in the overview must be one of the judgments supplied."""
-    norm = {" ".join(a.split()): a for a in allowed}
-    cited = [" ".join(c.split()) for c in _CITE.findall(text)]
+    """Every cited case number must be one of the judgments supplied, and every claim
+    (a bullet or sentence line — not a heading or the disclaimer) should cite one."""
+    norm = {re.sub(r"\s*/\s*", "/", " ".join(a.split())) for a in allowed}
+    cited = cited_signatures(text)
     valid = [c for c in cited if c in norm]
     invalid = sorted({c for c in cited if c not in norm})
-    paragraphs = [p for p in re.split(r"\n\s*\n|\n(?=\s*(?:\d+\.|-|•))", text) if p.strip()]
-    supported = sum(bool(_CITE.search(p)) for p in paragraphs)
+    lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
+    claims = [
+        ln
+        for ln in lines
+        if not _DISCLAIMER.search(ln) and not (_HEADING.match(ln) and not _BRACKET.search(ln))
+    ]
+    supported = sum(bool(cited_signatures(ln)) for ln in claims)
     return {
         "citations": len(cited),
         "valid": len(valid),
         "invalid": invalid,
         "distinct_cases": len(set(valid)),
-        "paragraphs_with_citation": f"{supported}/{len(paragraphs)}",
+        "claims_with_citation": f"{supported}/{len(claims)}",
     }
 
 

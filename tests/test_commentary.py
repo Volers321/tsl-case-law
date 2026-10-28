@@ -75,11 +75,23 @@ def test_annotate_all_caches(tmp_path):
 
 
 def test_citation_check_catches_case_numbers_outside_the_list():
-    text = "Sądy oddalają [V GC 1/15], a także [V  GC 2/15]. Inaczej [I C 999/99].\n\nKoniec."
+    text = (
+        "**1. Jak sądy rozstrzygają**\n"
+        "- Roczny termin z CMR [V GC 1/15; V  GC 2/15], także w apelacji [V GC 1/15, V GC 2 / 15].\n"
+        "- Inaczej przy OC [I C 999/99].\n"
+        "- Twierdzenie bez źródła.\n"
+        "*To nie jest porada prawna.*"
+    )
     chk = check_citations(text, {"V GC 1/15", "V GC 2/15"})
-    assert (chk["citations"], chk["valid"], chk["distinct_cases"]) == (3, 2, 2)
+    assert (chk["citations"], chk["valid"], chk["distinct_cases"]) == (5, 4, 2)
     assert chk["invalid"] == ["I C 999/99"]
-    assert chk["paragraphs_with_citation"] == "1/2"
+    assert chk["claims_with_citation"] == "2/3", "heading and disclaimer are not claims"
+
+
+def test_real_overview_format_has_no_false_alarms():
+    text = "- Roczny termin [V GC 388/14; V GC 1332/17; XII Ga 246/17].\n- Przypis [1]."
+    chk = check_citations(text, {"V GC 388/14", "V GC 1332/17", "XII Ga 246/17"})
+    assert chk["invalid"] == [] and chk["valid"] == 3
 
 
 def test_overview_reports_invented_citations():
