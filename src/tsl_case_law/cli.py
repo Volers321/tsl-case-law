@@ -26,6 +26,7 @@ CASES = Path("data/cases.jsonl")
 IDS = RAW / "_ids.json"
 LABEL_SHEET = Path("data/labels/sample.csv")
 EXTRACTED = Path("data/extracted.jsonl")
+NOTES = Path("data/commentary.jsonl")
 
 
 def load_cases(path: Path = CASES) -> list[dict]:
@@ -366,11 +367,18 @@ def _load_extracted() -> dict[int, dict]:
     return {r["id"]: r for r in rows}
 
 
+def _load_notes() -> dict[int, dict]:
+    if not NOTES.exists():
+        return {}
+    rows = map(json.loads, NOTES.read_text(encoding="utf-8").splitlines())
+    return {r["id"]: r for r in rows}
+
+
 def _examples():
     from .predict import build_examples
 
     extracted = _load_extracted()
-    examples = build_examples(load_cases(), extracted)
+    examples = build_examples(load_cases(), extracted, _load_notes())
     note = "LLM relevance filter" if extracted else "keyword filter only — run `tsl extract`"
     print(f"{len(examples)} first-instance TSL cases with a known outcome ({note})")
     return examples
@@ -404,11 +412,20 @@ def cmd_predict_eval(args) -> None:
             probs = P.predict_majority(train, test)
         elif m == "tfidf":
             probs = P.predict_tfidf(train, test)
-        elif m in ("llm", "llm-rag"):
+        elif m in ("llm", "llm-rag", "llm-rag-issue"):
             from .llm import LLM
 
+            if m == "llm-rag-issue" and not any(e.note for e in train):
+                print("  skip llm-rag-issue: no commentary yet — run `tsl annotate`")
+                continue
             llm = llm or LLM.from_env()
-            probs = P.predict_llm(llm, train, test, k=args.k if m == "llm-rag" else 0)
+            probs = P.predict_llm(
+                llm,
+                train,
+                test,
+                k=0 if m == "llm" else args.k,
+                by_issue=m == "llm-rag-issue",
+            )
         else:
             raise SystemExit(f"unknown method {m!r}")
         r = P.evaluate(gold, probs) | {"accuracy_ci95": P.bootstrap_ci(gold, probs)}
@@ -448,6 +465,9 @@ def cmd_similar(args) -> None:
     for e, score in hits:
         print(f"\n{score:.2f}  {e.case_number} ({e.date})  -> {LABEL_PL[e.label]}")
         print(f"      {_snip(e.summary, 300)}")
+        if e.note:
+            print(f"      Teza: {e.note['teza']}")
+            print(f"      Wskazówka: {e.note['wskazowka']}")
 
 
 def cmd_predict(args) -> None:
@@ -455,10 +475,13 @@ def cmd_predict(args) -> None:
     from .llm import LLM
 
     examples = _examples()
-    hits = P.SimilarCases(examples).search(args.text, args.k)
+    by_issue = any(e.note for e in examples)
+    hits = P.SimilarCases(examples, by_issue=by_issue).search(args.text, args.k)
     llm = LLM.from_env()
     raw = llm.complete(
-        P.PREDICT_SYSTEM, P.precedents_prompt(hits) + P.case_prompt(args.text), max_tokens=2048
+        P.PREDICT_SYSTEM,
+        P.precedents_prompt(hits, with_notes=by_issue) + P.case_prompt(args.text),
+        max_tokens=2048,
     )
     p = P.parse_probs(raw)
     if not p:
@@ -475,6 +498,8 @@ def cmd_predict(args) -> None:
             f" {mark}[{n}] {e.case_number} ({e.date[:4]}) {P.LABEL_PL[e.label]:18s} sim {score:.2f}"
         )
         print(f"       {_snip(e.summary, 200)}")
+        if e.note:
+            print(f"       Teza: {_snip(e.note['teza'], 220)}")
 
 
 def cmd_conduct_stats(args) -> None:
@@ -496,6 +521,61 @@ def cmd_conduct_stats(args) -> None:
             f"{r['vs_base']:+7.0%}"
         )
     print("\nCorrelation, not causation; groups overlap; facts as described by the court.")
+
+
+def cmd_annotate(args) -> None:
+    from .commentary import ANNOTATE_VERSION, annotate_all
+    from .llm import LLM
+
+    extracted = _load_extracted()
+    if not extracted:
+        raise SystemExit("Run `tsl extract` first — notes are written for TSL cases only.")
+    cases = [
+        c
+        for c in load_cases()
+        if (extracted.get(c["id"], {}).get("facts_llm") or {}).get("is_tsl") and c["assessment"]
+    ]
+    cases = cases[: args.limit] if args.limit else cases
+    llm = LLM.from_env()
+    print(f"Annotating {len(cases)} TSL judgments with {llm.model} (prompt {ANNOTATE_VERSION})")
+    notes = annotate_all(llm, cases, workers=args.workers)
+    NOTES.write_text("".join(json.dumps(n, ensure_ascii=False) + "\n" for n in notes), "utf-8")
+    ok = [n for n in notes if n.get("ok")]
+    flags = [g for n in ok for g in n.get("przepisy_grounded", [])]
+    print(f"Wrote {len(notes)} notes to {NOTES}; {len(notes) - len(ok)} failed")
+    if flags:
+        print(
+            f"provisions found in the judgment text: {sum(flags)}/{len(flags)} "
+            f"({sum(flags) / len(flags):.0%}) — the rest may be paraphrased or invented"
+        )
+
+
+def cmd_commentary(args) -> None:
+    from .commentary import NoteIndex, overview
+    from .llm import LLM
+
+    notes = list(_load_notes().values())
+    if not notes:
+        raise SystemExit("No commentary yet — run `tsl annotate` first.")
+    cases = {c["id"]: c for c in load_cases()}
+    result = overview(LLM.from_env(), args.issue, NoteIndex(cases, notes), k=args.n)
+    if not result["hits"]:
+        raise SystemExit("No judgments found for this issue — try other words.")
+    print(f"\nPRZEGLĄD ORZECZNICTWA: {args.issue}\n")
+    print(result["text"])
+    print("\nWyroki uwzględnione:")
+    for case, note, _score in result["hits"]:
+        print(
+            f"  {case['case_number']} ({case['date'][:10]}, {case.get('court', '')}) — {_snip(note['teza'], 140)}"
+        )
+    chk = result["check"]
+    print(
+        f"\nKontrola cytowań: {chk['valid']}/{chk['citations']} sygnatur z listy, "
+        f"{chk['distinct_cases']} różnych wyroków, akapity z cytowaniem {chk['paragraphs_with_citation']}"
+    )
+    if chk["invalid"]:
+        print(f"  ⚠ sygnatury spoza listy (możliwe halucynacje): {', '.join(chk['invalid'])}")
+    print("To nie jest porada prawna; komentarz powstał automatycznie z treści wyroków.")
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -548,7 +628,7 @@ def main(argv: list[str] | None = None) -> None:
     e.set_defaults(func=cmd_extract)
 
     pe = sub.add_parser("predict-eval", help="compare outcome predictors on the newest cases")
-    pe.add_argument("--methods", default="majority,tfidf,llm,llm-rag")
+    pe.add_argument("--methods", default="majority,tfidf,llm,llm-rag,llm-rag-issue")
     pe.add_argument("--test-frac", type=float, default=0.2)
     pe.add_argument("-k", type=int, default=5, help="precedents for llm-rag")
     pe.add_argument("--dev", action="store_true", help="evaluate on a validation split instead")
@@ -567,6 +647,16 @@ def main(argv: list[str] | None = None) -> None:
     cs = sub.add_parser("conduct-stats", help="claimant win rate by pre-trial conduct")
     cs.add_argument("--min-n", type=int, default=8)
     cs.set_defaults(func=cmd_conduct_stats)
+
+    an = sub.add_parser("annotate", help="LLM commentary note for every TSL judgment")
+    an.add_argument("--limit", type=int)
+    an.add_argument("--workers", type=int, default=6)
+    an.set_defaults(func=cmd_annotate)
+
+    co = sub.add_parser("commentary", help="case-law overview of a legal issue, with citations")
+    co.add_argument("issue", help='e.g. "przedawnienie roszczeń z umowy przewozu"')
+    co.add_argument("-n", type=int, default=12, help="judgments to draw on")
+    co.set_defaults(func=cmd_commentary)
 
     args = p.parse_args(argv)
     args.func(args)

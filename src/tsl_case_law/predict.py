@@ -42,6 +42,7 @@ class Example:
     summary: str
     label: str
     features: dict = field(default_factory=dict)
+    note: dict | None = None  # commentary written from the court's reasoning (precedents only)
 
     def feature_tokens(self) -> str:
         """Structured features as pseudo-words, so one TF-IDF model can use both."""
@@ -63,7 +64,9 @@ def gold_outcome(case: dict, extracted: dict | None) -> str:
     return ((extracted or {}).get("outcome_llm") or {}).get("outcome") or "UNKNOWN"
 
 
-def build_examples(cases: list[dict], extracted: dict[int, dict]) -> list[Example]:
+def build_examples(
+    cases: list[dict], extracted: dict[int, dict], notes: dict[int, dict] | None = None
+) -> list[Example]:
     """First-instance TSL cases with a known win / partial / lose outcome, oldest first.
 
     Without LLM extraction every case is kept (keyword filter only); with it, only cases
@@ -90,6 +93,9 @@ def build_examples(cases: list[dict], extracted: dict[int, dict]) -> list[Exampl
                 label=label,
                 features={k: facts_llm.get(k) for k in ("dispute_type", "defences", "conduct")}
                 | {"international": facts_llm.get("international")},
+                note=(notes or {}).get(c["id"])
+                if (notes or {}).get(c["id"], {}).get("ok")
+                else None,
             )
         )
     return sorted(out, key=lambda e: e.date)
@@ -105,16 +111,28 @@ def temporal_split(examples: list[Example], test_frac: float = 0.2):
 
 
 class SimilarCases:
-    """TF-IDF cosine similarity over the facts of past cases."""
+    """TF-IDF cosine similarity over past cases.
 
-    def __init__(self, examples: list[Example]):
+    ``by_issue=False`` compares the wording of the facts. ``by_issue=True`` indexes each
+    past case by its facts summary *plus* the commentary note (holding, issues, arguments),
+    so a query matches cases about the same legal question rather than similar words.
+    Queries are always facts only.
+    """
+
+    def __init__(self, examples: list[Example], by_issue: bool = False):
         from sklearn.feature_extraction.text import TfidfVectorizer
+
+        from .commentary import note_text
 
         self.examples = examples
         self.vec = TfidfVectorizer(
             lowercase=True, ngram_range=(1, 2), min_df=1, max_df=0.9, sublinear_tf=True
         )
-        self.matrix = self.vec.fit_transform([_clip(e.facts, 1500) for e in examples])
+        if by_issue:
+            docs = [e.summary + " " + (note_text(e.note) if e.note else "") for e in examples]
+        else:
+            docs = [_clip(e.facts, 1500) for e in examples]
+        self.matrix = self.vec.fit_transform(docs)
 
     def search(self, text: str, k: int = 5, exclude_id: int | None = None):
         sims = (self.matrix @ self.vec.transform([_clip(text, 1500)]).T).toarray().ravel()
@@ -184,13 +202,15 @@ def case_prompt(summary: str, features: dict | None = None) -> str:
     return "\n".join(lines)
 
 
-def precedents_prompt(hits: list[tuple[Example, float]]) -> str:
+def precedents_prompt(hits: list[tuple[Example, float]], with_notes: bool = False) -> str:
     if not hits:
         return ""
-    blocks = [
-        f"[{n}] {e.case_number} ({e.date[:4]}) — wynik: {LABEL_PL[e.label]}\n{e.summary}"
-        for n, (e, _) in enumerate(hits, start=1)
-    ]
+    blocks = []
+    for n, (e, _) in enumerate(hits, start=1):
+        block = f"[{n}] {e.case_number} ({e.date[:4]}) — wynik: {LABEL_PL[e.label]}\n{e.summary}"
+        if with_notes and e.note:
+            block += f"\nTeza sądu: {e.note['teza']}"
+        blocks.append(block)
     return "PODOBNE SPRAWY Z PRZESZŁOŚCI:\n" + "\n\n".join(blocks) + "\n\n"
 
 
@@ -217,6 +237,7 @@ def predict_llm(
     test: list[Example],
     *,
     k: int = 0,
+    by_issue: bool = False,
     cache_dir: str | Path = "data/cache/predict",
     workers: int = 6,
     progress: Callable[[str], None] = print,
@@ -224,10 +245,11 @@ def predict_llm(
     """LLM probabilities; with k > 0 the k most similar *training* cases are included."""
     from concurrent.futures import ThreadPoolExecutor
 
-    retriever = SimilarCases(train) if k else None
+    retriever = SimilarCases(train, by_issue=by_issue) if k else None
     # Precedents depend on which cases are in the training pool, so it is part of the key.
     pool_key = hashlib.sha1(",".join(str(e.id) for e in train).encode()).hexdigest()[:8]
-    cache = Path(cache_dir) / f"{PREDICT_VERSION}-k{k}" / (pool_key if k else "no-pool")
+    mode = "-issue" if by_issue else ""
+    cache = Path(cache_dir) / f"{PREDICT_VERSION}-k{k}{mode}" / (pool_key if k else "no-pool")
     cache.mkdir(parents=True, exist_ok=True)
     uniform = {lab: 1 / len(LABELS) for lab in LABELS}
 
@@ -235,8 +257,9 @@ def predict_llm(
         path = cache / f"{e.id}.json"
         if path.exists():
             return json.loads(path.read_text(encoding="utf-8"))
-        hits = retriever.search(e.facts, k) if retriever else []
-        user = precedents_prompt(hits) + case_prompt(e.summary, e.features)
+        query = e.summary if by_issue else e.facts
+        hits = retriever.search(query, k) if retriever else []
+        user = precedents_prompt(hits, with_notes=by_issue) + case_prompt(e.summary, e.features)
         p = None
         for _ in range(2):
             p = parse_probs(llm.complete(PREDICT_SYSTEM, user, max_tokens=2048))
@@ -255,7 +278,8 @@ def predict_llm(
         raise SystemExit(130) from None
     pool.shutdown()
     progress(
-        f"  llm k={k}: {len(results)} predictions, {sum('failed' in r for r in results)} failed"
+        f"  llm k={k}{mode}: {len(results)} predictions, "
+        f"{sum('failed' in r for r in results)} failed"
     )
     return results
 
