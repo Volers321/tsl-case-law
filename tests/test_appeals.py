@@ -107,5 +107,6 @@ def test_cli_appeals(tmp_path, monkeypatch, capsys):
     cli.main(["appeals", "--min-n", "1"])
     out = capsys.readouterr().out
     assert "3 linked" in out and "67%" in out and "changed by XIII Ga 1/16" in out
+    assert "ALL 3 TSL appellate judgments" in out and "changed or set aside in 67%" in out
     saved = json.loads((tmp_path / "data/appeals.json").read_text())
     assert saved["1"]["status"] == "upheld"

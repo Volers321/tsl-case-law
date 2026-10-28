@@ -164,3 +164,16 @@ def test_rag_cache_is_invalidated_when_the_precedent_pool_changes(tmp_path):
     n = len(llm.prompts)
     P.predict_llm(llm, train[5:], test[:3], k=2, cache_dir=tmp_path, progress=lambda _: None)
     assert len(llm.prompts) == n + 3
+
+
+def test_repeats_use_separate_caches_and_are_averaged(tmp_path):
+    ex = P.build_examples(*make_cases())
+    train, test = P.temporal_split(ex)
+    llm = FakeLLM()
+    runs = [
+        P.predict_llm(llm, train, test, k=0, repeat=r, cache_dir=tmp_path, progress=lambda _: None)
+        for r in range(3)
+    ]
+    assert len(llm.prompts) == 3 * len(test), "each repeat is a fresh set of calls"
+    avg = P.average_probs(runs)
+    assert all(abs(sum(p[lab] for lab in P.LABELS) - 1) < 1e-9 for p in avg)

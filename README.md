@@ -84,6 +84,8 @@ The first version of the pipeline kept 1305 cases, 24% with an unknown outcome a
 - **The LLM is worse calibrated than logistic regression** (Brier 0.696 vs 0.652): its probabilities are more confident than its accuracy justifies.
 - Three classes is a hard target: "partial" covers anything from 5% to 95% of the claim.
 
+**LLM run-to-run variance is as large as the gaps between methods.** Excluding two judgments reversed on appeal changed the precedent pool, which forced fresh LLM calls on the *same* 73 test cases: `llm-rag` moved from 0.274 to 0.411 and `llm-rag-issue` from 0.384 to 0.356, while the cached `llm` stayed at 0.356. So single-run comparisons of LLM methods here are noise. `tsl predict-eval --repeats N` now runs every LLM method N times, reports the min / max / mean accuracy of single runs and scores the averaged probabilities (a small ensemble).
+
 All tuning from here on runs on a validation split inside the training period (`tsl predict-eval --dev`); the test set above is reported, not optimised against.
 
 ### Pre-trial conduct and outcomes

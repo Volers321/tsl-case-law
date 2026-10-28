@@ -423,7 +423,7 @@ def cmd_predict_eval(args) -> None:
     )
     gold = [e.label for e in test]
     methods = args.methods.split(",")
-    results, llm = {}, None
+    results, llm, spread = {}, None, {}
     for m in methods:
         if m == "majority":
             probs = P.predict_majority(train, test)
@@ -436,16 +436,26 @@ def cmd_predict_eval(args) -> None:
                 print("  skip llm-rag-issue: no commentary yet — run `tsl annotate`")
                 continue
             llm = llm or LLM.from_env()
-            probs = P.predict_llm(
-                llm,
-                train,
-                test,
-                k=0 if m == "llm" else args.k,
-                by_issue=m == "llm-rag-issue",
-            )
+            runs = [
+                P.predict_llm(
+                    llm,
+                    train,
+                    test,
+                    k=0 if m == "llm" else args.k,
+                    by_issue=m == "llm-rag-issue",
+                    repeat=rep,
+                )
+                for rep in range(args.repeats)
+            ]
+            if len(runs) > 1:
+                per_run = [P.evaluate(gold, r)["accuracy"] for r in runs]
+                spread[m] = (min(per_run), max(per_run), sum(per_run) / len(per_run))
+            probs = P.average_probs(runs)
         else:
             raise SystemExit(f"unknown method {m!r}")
         r = P.evaluate(gold, probs) | {"accuracy_ci95": P.bootstrap_ci(gold, probs)}
+        if m in spread:
+            r["runs_accuracy_min_max_mean"] = spread[m]
         results[m] = r
     print("\n3 classes (win / partial / lose)            | claimant gets anything?")
     print(
@@ -458,6 +468,11 @@ def cmd_predict_eval(args) -> None:
             f"{r['brier']:6.3f} | {r['any_win_accuracy']:5.3f} {r['any_win_brier']:6.3f}"
         )
     print("Brier: 0 = perfect probabilities, lower is better; majority is the bar to beat.")
+    if spread:
+        print(f"\nLLM rows above average {args.repeats} runs. Accuracy of single runs:")
+        for m, (lo, hi, mean) in spread.items():
+            print(f"  {m:14s} min {lo:.3f}  max {hi:.3f}  mean {mean:.3f}  (spread {hi - lo:.3f})")
+        print("A difference between methods smaller than the spread is noise.")
     if args.dev:
         return  # dev results are for tuning only; the report holds test results
     REPORT.write_text(
@@ -641,6 +656,39 @@ def cmd_appeals(args) -> None:
         "\n'not_found' does not mean final: many appeals are not published in SAOS, so the\n"
         "reversal rate is measured on the appealed cases we can see, not on all judgments."
     )
+    # The direct measure: every appellate judgment says whether the ruling below stood.
+    appeals = [c for c in tsl_cases if c["instance"] == "appeal"]
+    verdicts = Counter(gold_outcome(c, extracted.get(c["id"])) for c in appeals)
+    known = verdicts["APPEAL_DISMISSED"] + verdicts["CHANGED"] + verdicts["SET_ASIDE"]
+    if known:
+        from .predict import wilson
+
+        rev = (verdicts["CHANGED"] + verdicts["SET_ASIDE"]) / known
+        lo, hi = wilson(rev, known)
+        print(
+            f"\nALL {len(appeals)} TSL appellate judgments (no linking needed): {known} with a "
+            f"known outcome — upheld {verdicts['APPEAL_DISMISSED']}, changed "
+            f"{verdicts['CHANGED']}, set aside {verdicts['SET_ASIDE']}"
+        )
+        print(
+            f"  -> the ruling below was changed or set aside in {rev:.0%} [95% CI {lo:.0%}–{hi:.0%}]"
+        )
+        by_type: dict[str, Counter] = {}
+        for c in appeals:
+            by_type.setdefault(dispute(c), Counter())[gold_outcome(c, extracted.get(c["id"]))] += 1
+        print(f"  {'dispute type':28s} {'appeals':>7s} {'reversed':>9s}")
+        for t, cnt in sorted(by_type.items(), key=lambda kv: -sum(kv[1].values())):
+            n = cnt["APPEAL_DISMISSED"] + cnt["CHANGED"] + cnt["SET_ASIDE"]
+            if n >= args.min_n:
+                print(f"  {t:28s} {n:7d} {(cnt['CHANGED'] + cnt['SET_ASIDE']) / n:9.0%}")
+        print("  (only appealed judgments: a reversal rate among appeals, not among all rulings)")
+
+    linked = {link["appeal_id"] for link in links.values()}
+    matched = sum(c["id"] in linked for c in appeals)
+    print(
+        f"\nlinking: {matched} of {len(appeals)} TSL appeals matched a first-instance judgment "
+        "in this dataset (SAOS rarely publishes both judgments of one case)"
+    )
     reversed_ = [c for c in tsl_cases if appeal_status(c["id"], links) in REVERSED]
     if reversed_:
         print("\nexamples of reversed judgments (excluded from prediction and precedents):")
@@ -705,6 +753,7 @@ def main(argv: list[str] | None = None) -> None:
     pe.add_argument("--test-frac", type=float, default=0.2)
     pe.add_argument("-k", type=int, default=5, help="precedents for llm-rag")
     pe.add_argument("--dev", action="store_true", help="evaluate on a validation split instead")
+    pe.add_argument("--repeats", type=int, default=1, help="LLM runs per method (averaged)")
     pe.add_argument(
         "--keep-reversed", action="store_true", help="keep judgments changed/set aside on appeal"
     )

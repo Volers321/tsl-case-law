@@ -255,11 +255,16 @@ def predict_llm(
     *,
     k: int = 0,
     by_issue: bool = False,
+    repeat: int = 0,
     cache_dir: str | Path = "data/cache/predict",
     workers: int = 6,
     progress: Callable[[str], None] = print,
 ) -> list[dict]:
-    """LLM probabilities; with k > 0 the k most similar *training* cases are included."""
+    """LLM probabilities; with k > 0 the k most similar *training* cases are included.
+
+    ``repeat`` = n runs the same prompts again into a separate cache: LLM answers vary
+    between calls, and that run-to-run spread has to be measured, not ignored.
+    """
     from concurrent.futures import ThreadPoolExecutor
 
     retriever = SimilarCases(train, by_issue=by_issue) if k else None
@@ -267,6 +272,8 @@ def predict_llm(
     pool_key = hashlib.sha1(",".join(str(e.id) for e in train).encode()).hexdigest()[:8]
     mode = "-issue" if by_issue else ""
     cache = Path(cache_dir) / f"{PREDICT_VERSION}-k{k}{mode}" / (pool_key if k else "no-pool")
+    if repeat:
+        cache = cache / f"r{repeat}"
     cache.mkdir(parents=True, exist_ok=True)
     uniform = {lab: 1 / len(LABELS) for lab in LABELS}
 
@@ -378,3 +385,12 @@ def wilson(p: float, n: int, z: float = 1.96) -> tuple[float, float]:
     centre = (p + z * z / (2 * n)) / (1 + z * z / n)
     half = z * math.sqrt(p * (1 - p) / n + z * z / (4 * n * n)) / (1 + z * z / n)
     return max(0.0, centre - half), min(1.0, centre + half)
+
+
+def average_probs(runs: list[list[dict]]) -> list[dict]:
+    """Mean of several runs' probabilities per case — a cheap ensemble that usually
+    calibrates better than any single run."""
+    return [
+        {lab: sum(r[i][lab] for r in runs) / len(runs) for lab in LABELS}
+        for i in range(len(runs[0]))
+    ]
