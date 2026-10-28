@@ -411,7 +411,11 @@ dla firmy krótką, jasną ocenę sprawy. Dostajesz opis faktów, prognozę szan
   "scenariusze": [{"jesli": "warunek", "to": "wynik"}],
   "do_ustalenia": ["maks. 6 dowodów lub faktów do zebrania"],
   "ryzyka": ["maks. 3 największe ryzyka"],
-  "precedensy": [numery wyroków, które naprawdę pasują i na których się opierasz]
+  "precedensy": [numery wyroków, które naprawdę pasują i na których się opierasz],
+  "symulowana_sentencja": ["punkty rozstrzygnięcia zgodne z najbardziej prawdopodobnym wynikiem,
+    w stylu sentencji: 'I. zasądza od pozwanego na rzecz powoda kwotę [kwota frachtu] …',
+    'II. w pozostałym zakresie powództwo oddala', 'III. … koszty procesu …';
+    nieznane kwoty i daty jako [nawias kwadratowy]"]
 }
 ZASADY: pisz po polsku, rzeczowo. Powołuj tylko przepisy, których jesteś pewien. Nie wymyślaj
 faktów spoza opisu — braki nazwij w "do_ustalenia". Wyroki o niskim podobieństwie traktuj
@@ -463,6 +467,7 @@ def parse_memo(raw: str, n_hits: int) -> dict | None:
         # a model citing a precedent that was not supplied is caught here
         "precedensy": [n for n in prec if 1 <= n <= n_hits],
         "precedensy_spoza_listy": [n for n in prec if not 1 <= n <= n_hits],
+        "sentencja": strs("symulowana_sentencja", 6),
     }
 
 
@@ -486,6 +491,17 @@ def render_memo(memo: dict, probs: dict, hits) -> str:
     ):
         if memo[key]:
             out += [f"## {title}"] + [f"- {x}" for x in memo[key]] + [""]
+    if memo.get("sentencja"):
+        out += (
+            [
+                "## Symulacja możliwego rozstrzygnięcia",
+                "*To nie jest orzeczenie sądu — tak mogłaby brzmieć sentencja, gdyby sąd orzekł "
+                "zgodnie z prognozą.*",
+                "",
+            ]
+            + [f"> {x}" for x in memo["sentencja"]]
+            + [""]
+        )
     if memo["scenariusze"]:
         out += ["## Scenariusze"] + [
             f"- Jeśli {s['jesli']} → {s['to']}" for s in memo["scenariusze"]

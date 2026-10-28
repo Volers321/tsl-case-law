@@ -215,6 +215,7 @@ def test_cli_predict_reads_facts_from_file(tmp_path, monkeypatch, capsys):
                         "do_ustalenia": ["data reklamacji"],
                         "ryzyka": ["upływ roku"],
                         "precedensy": [1, 9],
+                        "symulowana_sentencja": ["I. powództwo oddala", "II. zasądza koszty"],
                     }
                 )
             return super().complete(system, user, max_tokens)
@@ -225,4 +226,6 @@ def test_cli_predict_reads_facts_from_file(tmp_path, monkeypatch, capsys):
     assert "Najbardziej prawdopodobny wynik:** Powód raczej przegra." in out
     assert "Kluczowe pytanie" in out and "Jeśli termin dochowany → wygrana" in out
     assert "★ [1]" in out and "spoza listy: [9]" in out, "invented precedent number flagged"
+    assert "Symulacja możliwego rozstrzygnięcia" in out and "> I. powództwo oddala" in out
+    assert "To nie jest orzeczenie sądu" in out
     assert (tmp_path / "ocena.md").read_text().startswith("# Ocena sprawy")
