@@ -156,7 +156,7 @@ The remaining 5% of provisions are not found verbatim — they may be paraphrase
 - [x] LLM extraction (prompt-versioned cache, parallel): relevance, party roles, dispute type, claim, defences, neutral summary — from facts only; outcome from the sentencja only
 - [x] Pre-trial conduct features (demand, acknowledgement, partial payment, settlement attempt, timely complaint, delivery accepted without reservations) — `tsl conduct-stats` with Wilson intervals
 - [x] Similar-case retrieval (TF-IDF) and four outcome predictors on a temporal split, with bootstrap CIs and Brier score — `tsl predict-eval`
-- [x] `tsl predict "<facts>"`: probabilities, reasoning and the cited precedents
+- [x] `tsl predict`: the new case is first summarised like the database cases, then a structured memo — most likely outcome, confidence, the key question, arguments for each side, provisions, if-then scenarios, evidence to collect, risks — with precedents marked as used or weakly matching, and invented precedent numbers flagged
 - [x] Results on the full dataset (above)
 - [x] Case-law commentary from the judgments themselves: a note per judgment (holding, arguments, provisions, practical takeaway) — `tsl annotate`; issue overviews with case-number citations — `tsl commentary "<zagadnienie>"`; provisions and citations checked automatically
 - [x] Appeal linking: each first-instance judgment is matched to the appeal against it (signature + lower-court city, appeal must postdate it); judgments **changed or set aside on appeal are excluded** from training, testing, precedents and overviews, upheld ones are marked as confirmed — `tsl appeals` reports reversal rates by court and dispute type
@@ -187,7 +187,7 @@ tsl appeals                         # link judgments to appeals, reversal rates;
 tsl annotate                        # commentary note per TSL judgment (holding, provisions, tip)
 tsl commentary "przedawnienie roszczeń z umowy przewozu"   # case-law overview with citations
 tsl predict "Przewoźnik żąda frachtu 4 500 zł, zleceniodawca potrącił karę za opóźnienie…"
-tsl predict -f casus.txt             # longer description from a file
+tsl predict -f casus.txt -o ocena.md # memo: likely outcome, key question, arguments, provisions, scenarios, what to establish
 ```
 
 ## Data

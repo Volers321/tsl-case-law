@@ -394,3 +394,120 @@ def average_probs(runs: list[list[dict]]) -> list[dict]:
         {lab: sum(r[i][lab] for r in runs) / len(runs) for lab in LABELS}
         for i in range(len(runs[0]))
     ]
+
+
+# ------------------------------------------------------------------------- case memo
+
+MEMO_SYSTEM = """Jesteś doświadczonym prawnikiem od sporów TSL (przewóz, spedycja, CMR). Przygotuj
+dla firmy krótką, jasną ocenę sprawy. Dostajesz opis faktów, prognozę szans i podobne wyroki
+(z numerami [1], [2]…, ich wynikami i tezami sądów). Zwróć jeden JSON:
+{
+  "najbardziej_prawdopodobny_wynik": "1-2 zdania, konkretnie: co powód prawdopodobnie dostanie",
+  "pewnosc": "niska" / "średnia" / "wysoka",
+  "kluczowe_pytanie": "1 zdanie: okoliczność, od której wynik zależy najbardziej",
+  "za_powodem": ["maks. 4 argumenty"],
+  "za_pozwanym": ["maks. 4 argumenty"],
+  "przepisy": ["przepisy, które sąd najpewniej zastosuje, z krótkim wyjaśnieniem"],
+  "scenariusze": [{"jesli": "warunek", "to": "wynik"}],
+  "do_ustalenia": ["maks. 6 dowodów lub faktów do zebrania"],
+  "ryzyka": ["maks. 3 największe ryzyka"],
+  "precedensy": [numery wyroków, które naprawdę pasują i na których się opierasz]
+}
+ZASADY: pisz po polsku, rzeczowo. Powołuj tylko przepisy, których jesteś pewien. Nie wymyślaj
+faktów spoza opisu — braki nazwij w "do_ustalenia". Wyroki o niskim podobieństwie traktuj
+ostrożnie. To ocena szans dla strony sporu, nie wyrok i nie porada prawna."""
+
+WEAK_SIMILARITY = 0.08
+
+
+def memo_prompt(text: str, probs: dict, hits) -> str:
+    chances = ", ".join(f"{LABEL_PL[lab]} {probs[lab]:.0%}" for lab in LABELS)
+    lines = []
+    for n, (e, score) in enumerate(hits, start=1):
+        weak = " (SŁABO PODOBNY)" if score < WEAK_SIMILARITY else ""
+        teza = f" Teza: {e.note['teza']}" if e.note else ""
+        lines.append(f"[{n}] {e.case_number}, wynik: {LABEL_PL[e.label]}{weak}. {e.summary}{teza}")
+    return (
+        f"OPIS SPRAWY:\n{text.strip()}\n\nPROGNOZA SZANS POWODA: {chances}\n\n"
+        "PODOBNE WYROKI:\n" + "\n".join(lines)
+    )
+
+
+def parse_memo(raw: str, n_hits: int) -> dict | None:
+    d = parse_json(raw)
+    if not d or not d.get("najbardziej_prawdopodobny_wynik"):
+        return None
+
+    def strs(key, n):
+        v = d.get(key)
+        return [str(x).strip() for x in v if str(x).strip()][:n] if isinstance(v, list) else []
+
+    scen = [
+        {"jesli": str(s.get("jesli", "")).strip(), "to": str(s.get("to", "")).strip()}
+        for s in d.get("scenariusze") or []
+        if isinstance(s, dict) and s.get("jesli")
+    ][:4]
+    prec = sorted({int(x) for x in d.get("precedensy") or [] if str(x).isdigit()})
+    return {
+        "wynik": str(d["najbardziej_prawdopodobny_wynik"]).strip(),
+        "pewnosc": d.get("pewnosc")
+        if d.get("pewnosc") in ("niska", "średnia", "wysoka")
+        else "niska",
+        "kluczowe_pytanie": str(d.get("kluczowe_pytanie") or "").strip(),
+        "za_powodem": strs("za_powodem", 4),
+        "za_pozwanym": strs("za_pozwanym", 4),
+        "przepisy": strs("przepisy", 6),
+        "scenariusze": scen,
+        "do_ustalenia": strs("do_ustalenia", 6),
+        "ryzyka": strs("ryzyka", 3),
+        # a model citing a precedent that was not supplied is caught here
+        "precedensy": [n for n in prec if 1 <= n <= n_hits],
+        "precedensy_spoza_listy": [n for n in prec if not 1 <= n <= n_hits],
+    }
+
+
+def render_memo(memo: dict, probs: dict, hits) -> str:
+    """Markdown memo; the same text is printed and can be saved with --out."""
+    out = ["# Ocena sprawy (prognoza, nie porada prawna)", ""]
+    out += [f"**Najbardziej prawdopodobny wynik:** {memo['wynik']}", ""]
+    out += [
+        f"**Pewność:** {memo['pewnosc']}  ·  szanse powoda: "
+        + ", ".join(f"{LABEL_PL[lab]} {probs[lab]:.0%}" for lab in LABELS),
+        "",
+    ]
+    if memo["kluczowe_pytanie"]:
+        out += [f"**Kluczowe pytanie:** {memo['kluczowe_pytanie']}", ""]
+    for title, key in (
+        ("Za powodem", "za_powodem"),
+        ("Za pozwanym", "za_pozwanym"),
+        ("Przepisy", "przepisy"),
+        ("Co ustalić", "do_ustalenia"),
+        ("Największe ryzyka", "ryzyka"),
+    ):
+        if memo[key]:
+            out += [f"## {title}"] + [f"- {x}" for x in memo[key]] + [""]
+    if memo["scenariusze"]:
+        out += ["## Scenariusze"] + [
+            f"- Jeśli {s['jesli']} → {s['to']}" for s in memo["scenariusze"]
+        ]
+        out.append("")
+    out.append("## Podobne wyroki")
+    for n, (e, score) in enumerate(hits, start=1):
+        used = "★ " if n in memo["precedensy"] else ""
+        weak = " — słabo pasuje" if score < WEAK_SIMILARITY else ""
+        upheld = ", utrzymany w apelacji" if e.appeal == "upheld" else ""
+        teza = f"  \n  Teza: {e.note['teza']}" if e.note else ""
+        out.append(
+            f"- {used}[{n}] {e.case_number} ({e.date[:4]}{upheld}) — {LABEL_PL[e.label]}"
+            f"{weak}{teza}"
+        )
+    if memo["precedensy_spoza_listy"]:
+        out.append(
+            f"\n⚠ Model powołał wyroki spoza listy: {memo['precedensy_spoza_listy']} (pominięte)"
+        )
+    out += [
+        "",
+        "★ = wyrok, na którym opiera się ocena. Trafność prognoz na teście: ok. 40% "
+        "przy trzech możliwych wynikach — traktuj to jako punkt wyjścia, nie rozstrzygnięcie.",
+    ]
+    return "\n".join(out)

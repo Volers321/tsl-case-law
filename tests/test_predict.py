@@ -190,7 +190,39 @@ def test_cli_predict_reads_facts_from_file(tmp_path, monkeypatch, capsys):
     (tmp_path / "casus.txt").write_text(
         "Reklamacja po terminie, przedawnienie roszczenia.", "utf-8"
     )
-    monkeypatch.setattr("tsl_case_law.llm.LLM.from_env", classmethod(lambda cls: FakeLLM()))
-    cli.main(["predict", "-f", "casus.txt"])
+
+    class MemoLLM(FakeLLM):
+        def complete(self, system, user, max_tokens=2048):
+            if "stanu faktycznego" in system:  # facts extraction of the new case
+                return json.dumps(
+                    {
+                        "is_tsl": True,
+                        "dispute_type": "zaplata_frachtu",
+                        "defences": ["przedawnienie"],
+                        "summary": "przedawnienie reklamacja",
+                    }
+                )
+            if "ocenę sprawy" in system:
+                return json.dumps(
+                    {
+                        "najbardziej_prawdopodobny_wynik": "Powód raczej przegra.",
+                        "pewnosc": "średnia",
+                        "kluczowe_pytanie": "Czy reklamację złożono w terminie?",
+                        "za_powodem": ["fracht wykonany"],
+                        "za_pozwanym": ["przedawnienie"],
+                        "przepisy": ["art. 32 CMR — roczny termin"],
+                        "scenariusze": [{"jesli": "termin dochowany", "to": "wygrana"}],
+                        "do_ustalenia": ["data reklamacji"],
+                        "ryzyka": ["upływ roku"],
+                        "precedensy": [1, 9],
+                    }
+                )
+            return super().complete(system, user, max_tokens)
+
+    monkeypatch.setattr("tsl_case_law.llm.LLM.from_env", classmethod(lambda cls: MemoLLM()))
+    cli.main(["predict", "-f", "casus.txt", "-o", "ocena.md"])
     out = capsys.readouterr().out
-    assert "Szanse powoda" in out and "przegrana" in out and "Podobne sprawy" in out
+    assert "Najbardziej prawdopodobny wynik:** Powód raczej przegra." in out
+    assert "Kluczowe pytanie" in out and "Jeśli termin dochowany → wygrana" in out
+    assert "★ [1]" in out and "spoza listy: [9]" in out, "invented precedent number flagged"
+    assert (tmp_path / "ocena.md").read_text().startswith("# Ocena sprawy")

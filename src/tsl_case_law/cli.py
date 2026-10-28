@@ -505,6 +505,7 @@ def cmd_similar(args) -> None:
 
 def cmd_predict(args) -> None:
     from . import predict as P
+    from .extract import extract_facts
     from .llm import LLM
 
     if args.file:
@@ -512,33 +513,42 @@ def cmd_predict(args) -> None:
     if not (args.text or "").strip():
         raise SystemExit('Describe the dispute: tsl predict "…" or tsl predict -f casus.txt')
     examples = _examples()
-    by_issue = any(e.note for e in examples)
-    hits = P.SimilarCases(examples, by_issue=by_issue).search(args.text, args.k)
     llm = LLM.from_env()
+    # Describe the new case the way the database describes past ones (neutral summary,
+    # dispute type, defences, conduct), so retrieval compares like with like.
+    facts = extract_facts(llm, {"facts": args.text})
+    if facts.get("ok") and not facts.get("is_tsl"):
+        print("⚠ The model does not see a freight/forwarding dispute here — results may not fit.")
+    summary = facts.get("summary") or args.text
+    features = {k: facts.get(k) for k in ("dispute_type", "defences", "conduct")}
+    by_issue = any(e.note for e in examples)
+    query = " ".join(
+        [summary, str(features.get("dispute_type") or ""), *(features.get("defences") or [])]
+    )
+    hits = P.SimilarCases(examples, by_issue=by_issue).search(query, args.k)
     raw = llm.complete(
         P.PREDICT_SYSTEM,
-        P.precedents_prompt(hits, with_notes=by_issue) + P.case_prompt(args.text),
+        P.precedents_prompt(hits, with_notes=by_issue) + P.case_prompt(args.text, features),
         max_tokens=2048,
     )
     p = P.parse_probs(raw)
     if not p:
         raise SystemExit("Could not parse the model's answer:\n" + raw)
-    print("\nSzanse powoda (prognoza, nie porada prawna):")
-    for lab in P.LABELS:
-        print(f"  {P.LABEL_PL[lab]:20s} {p[lab]:5.0%}  " + "█" * round(p[lab] * 30))
-    print(f"\nUzasadnienie: {p['reason']}")
-    cited = {int(x) for x in p["precedents"] if str(x).isdigit()}
-    print("\nPodobne sprawy" + (" (* = powołane przez model)" if cited else "") + ":")
-    for n, (e, score) in enumerate(hits, start=1):
-        mark = "*" if n in cited else " "
-        upheld = " ✓ apelacja oddalona" if e.appeal == "upheld" else ""
-        print(
-            f" {mark}[{n}] {e.case_number} ({e.date[:4]}) {P.LABEL_PL[e.label]:18s} "
-            f"sim {score:.2f}{upheld}"
+    memo = None
+    for _ in range(2):
+        memo = P.parse_memo(
+            llm.complete(P.MEMO_SYSTEM, P.memo_prompt(args.text, p, hits), max_tokens=4096),
+            len(hits),
         )
-        print(f"       {_snip(e.summary, 200)}")
-        if e.note:
-            print(f"       Teza: {_snip(e.note['teza'], 220)}")
+        if memo:
+            break
+    if not memo:
+        raise SystemExit("Could not build the memo — run the command again.")
+    text = P.render_memo(memo, p, hits)
+    print("\n" + text)
+    if args.out:
+        Path(args.out).write_text(text + "\n", encoding="utf-8")
+        print(f"\nZapisano ocenę do pliku {args.out}")
 
 
 def cmd_conduct_stats(args) -> None:
@@ -771,6 +781,7 @@ def main(argv: list[str] | None = None) -> None:
     pr = sub.add_parser("predict", help="estimate the outcome of a described dispute")
     pr.add_argument("text", nargs="?", help="facts of the dispute, in Polish")
     pr.add_argument("-f", "--file", help="read the facts from a text file instead")
+    pr.add_argument("-o", "--out", help="also save the memo as a Markdown file")
     pr.add_argument("-k", type=int, default=5)
     pr.set_defaults(func=cmd_predict)
 
