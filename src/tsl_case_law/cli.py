@@ -507,6 +507,10 @@ def cmd_predict(args) -> None:
     from . import predict as P
     from .llm import LLM
 
+    if args.file:
+        args.text = Path(args.file).read_text(encoding="utf-8")
+    if not (args.text or "").strip():
+        raise SystemExit('Describe the dispute: tsl predict "…" or tsl predict -f casus.txt')
     examples = _examples()
     by_issue = any(e.note for e in examples)
     hits = P.SimilarCases(examples, by_issue=by_issue).search(args.text, args.k)
@@ -765,7 +769,8 @@ def main(argv: list[str] | None = None) -> None:
     si.set_defaults(func=cmd_similar)
 
     pr = sub.add_parser("predict", help="estimate the outcome of a described dispute")
-    pr.add_argument("text", help="facts of the dispute, in Polish")
+    pr.add_argument("text", nargs="?", help="facts of the dispute, in Polish")
+    pr.add_argument("-f", "--file", help="read the facts from a text file instead")
     pr.add_argument("-k", type=int, default=5)
     pr.set_defaults(func=cmd_predict)
 

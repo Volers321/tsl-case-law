@@ -177,3 +177,20 @@ def test_repeats_use_separate_caches_and_are_averaged(tmp_path):
     assert len(llm.prompts) == 3 * len(test), "each repeat is a fresh set of calls"
     avg = P.average_probs(runs)
     assert all(abs(sum(p[lab] for lab in P.LABELS) - 1) < 1e-9 for p in avg)
+
+
+def test_cli_predict_reads_facts_from_file(tmp_path, monkeypatch, capsys):
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "data").mkdir()
+    cases, extracted = make_cases()
+    (tmp_path / "data/cases.jsonl").write_text("".join(json.dumps(c) + "\n" for c in cases))
+    (tmp_path / "data/extracted.jsonl").write_text(
+        "".join(json.dumps(r) + "\n" for r in extracted.values())
+    )
+    (tmp_path / "casus.txt").write_text(
+        "Reklamacja po terminie, przedawnienie roszczenia.", "utf-8"
+    )
+    monkeypatch.setattr("tsl_case_law.llm.LLM.from_env", classmethod(lambda cls: FakeLLM()))
+    cli.main(["predict", "-f", "casus.txt"])
+    out = capsys.readouterr().out
+    assert "Szanse powoda" in out and "przegrana" in out and "Podobne sprawy" in out

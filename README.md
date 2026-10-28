@@ -187,6 +187,7 @@ tsl appeals                         # link judgments to appeals, reversal rates;
 tsl annotate                        # commentary note per TSL judgment (holding, provisions, tip)
 tsl commentary "przedawnienie roszczeń z umowy przewozu"   # case-law overview with citations
 tsl predict "Przewoźnik żąda frachtu 4 500 zł, zleceniodawca potrącił karę za opóźnienie…"
+tsl predict -f casus.txt             # longer description from a file
 ```
 
 ## Data
