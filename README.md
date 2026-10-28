@@ -114,7 +114,7 @@ Commentaries and glosses in Lex/Legalis are copyrighted; judgments are not. So `
 
 *A bug the real output exposed:* the first version of the citation check flagged 9 "hallucinated" case numbers in the first overview. All were genuine — the model had put several in one bracket (`[V GC 388/14; IX GC 1392/16]`) and the checker read the bracket as a single unknown number. The checker had a false-alarm problem, not the model; it now splits brackets and has a regression test built from that output.
 
-The remaining 5% of provisions are mostly paraphrases ("art. 32 CMR" written as "Konwencja CMR, art. 32 ust. 1 lit. c") but can also be invented — the per-note flag (`przepisy_grounded`) lets the UI show unverified ones differently.
+The remaining 5% of provisions are not found verbatim — they may be paraphrased or invented; a manual check of a sample is still to do. The per-note flag (`przepisy_grounded`) lets a UI show unverified provisions differently.
 
 ## Status
 
