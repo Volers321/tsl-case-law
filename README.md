@@ -104,6 +104,24 @@ Share of first-instance cases in which the claimant won at least partly (all cas
 
 The striking "late complaint → claimant wins 90%" is counter-intuitive. A likely explanation (a hypothesis, not yet checked) is party roles: if the claimant is a **carrier suing for freight**, a shipper who did not complain about damage in time cannot set it off. Conduct features only mean something **relative to who is suing whom** — the next version of the table splits by claimant role. Correlation, not causation; small groups, overlapping categories.
 
+### How often appeals succeed
+
+Of **279 TSL appellate judgments** with a known outcome, the court of second instance **changed or set aside the ruling below in 34%** (95 of 279; Wilson 95% CI 29–40%). By dispute type (LLM-classified, groups with ≥ 7 appeals):
+
+| Dispute | Appeals | Changed or set aside |
+|---|---:|---:|
+| unpaid freight | 107 | 27% |
+| cargo loss / damage | 81 | 38% |
+| carrier's liability insurance | 51 | 37% |
+| forwarder's liability | 13 | 54% |
+| other | 12 | 42% |
+| late delivery | 8 | 12% |
+| contractual penalties | 7 | 43% |
+
+Freight-payment suits, usually documentary, are overturned least; disputes about who was the forwarder and who the carrier most — though with 13 appeals that figure is shaky. This is a rate **among appealed judgments**, not among all rulings, and only for appeals published in SAOS.
+
+Linking each first-instance judgment to its own appeal (by the lower court's case number and city) worked for only 13 of 285 TSL appeals: SAOS rarely publishes both judgments of one case. The 2 first-instance judgments found to be changed are excluded from prediction and precedents; upheld ones are marked as confirmed.
+
 ### Case-law commentary
 
 Commentaries and glosses in Lex/Legalis are copyrighted; judgments are not. So `tsl annotate` writes a note for each of the **675 TSL judgments** from the court's own reasoning — holding, key arguments, provisions relied on, a practical takeaway — and `tsl commentary "<issue>"` turns the notes into a case-law overview in which every claim cites a case number.
