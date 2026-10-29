@@ -422,7 +422,8 @@ ZASADY: pisz po polsku, rzeczowo. W "przepisy" powołuj WYŁĄCZNIE przepisy z d
 ŚCIĄGAWKI PRZEPISÓW albo z tez podanych wyroków — i opisuj je zgodnie ze ściągawką. Przy
 przewozie międzynarodowym stosuj CMR (przedawnienie: art. 32 CMR), przy krajowym Prawo
 przewozowe. Nie wymyślaj faktów spoza opisu — braki nazwij w "do_ustalenia". Wyroki o niskim
-podobieństwie traktuj ostrożnie. To ocena szans dla strony sporu, nie wyrok i nie porada prawna."""
+podobieństwie traktuj ostrożnie (podobieństwo podano przy każdym). W "precedensy" zawsze wymień numery wyroków,
+na które powołujesz się w tekście. To ocena szans dla strony sporu, nie wyrok i nie porada prawna."""
 
 # Short, checked descriptions of the provisions that decide most TSL disputes. The memo may
 # cite only these or provisions from the precedents' holdings; anything else is flagged.
@@ -537,14 +538,11 @@ def verify_provision(text: str, hits) -> bool:
     return all(ok)
 
 
-WEAK_SIMILARITY = 0.08
-
-
 def memo_prompt(text: str, probs: dict, hits) -> str:
     chances = ", ".join(f"{LABEL_PL[lab]} {probs[lab]:.0%}" for lab in LABELS)
     lines = []
     for n, (e, score) in enumerate(hits, start=1):
-        weak = " (SŁABO PODOBNY)" if score < WEAK_SIMILARITY else ""
+        weak = f" (podobieństwo {score:.2f})"
         teza = f" Teza: {e.note['teza']}" if e.note else ""
         lines.append(f"[{n}] {e.case_number}, wynik: {LABEL_PL[e.label]}{weak}. {e.summary}{teza}")
     return (
@@ -580,8 +578,12 @@ def parse_memo(raw: str, n_hits: int) -> dict | None:
         "scenariusze": scen,
         "do_ustalenia": strs("do_ustalenia", 6),
         "ryzyka": strs("ryzyka", 3),
-        # a model citing a precedent that was not supplied is caught here
-        "precedensy": [n for n in prec if 1 <= n <= n_hits],
+        # a model citing a precedent that was not supplied is caught here; precedents the
+        # memo cites in its text ("jak w [1]") count as used even if the list was left empty
+        "precedensy": sorted(
+            {n for n in prec if 1 <= n <= n_hits}
+            | {int(x) for x in re.findall(r"\[(\d+)\]", raw) if 1 <= int(x) <= n_hits}
+        ),
         "precedensy_spoza_listy": [n for n in prec if not 1 <= n <= n_hits],
         "sentencja": strs("symulowana_sentencja", 6),
     }
@@ -630,7 +632,7 @@ def render_memo(memo: dict, probs: dict, hits) -> str:
     out.append("## Podobne wyroki")
     for n, (e, score) in enumerate(hits, start=1):
         used = "★ " if n in memo["precedensy"] else ""
-        weak = " — słabo pasuje" if score < WEAK_SIMILARITY else ""
+        weak = f" · podobieństwo {score:.2f}"
         upheld = ", utrzymany w apelacji" if e.appeal == "upheld" else ""
         teza = f"  \n  Teza: {e.note['teza']}" if e.note else ""
         out.append(

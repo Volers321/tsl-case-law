@@ -526,14 +526,17 @@ def cmd_predict(args) -> None:
         [summary, str(features.get("dispute_type") or ""), *(features.get("defences") or [])]
     )
     hits = P.SimilarCases(examples, by_issue=by_issue).search(query, args.k)
-    raw = llm.complete(
-        P.PREDICT_SYSTEM,
-        P.precedents_prompt(hits, with_notes=by_issue) + P.case_prompt(args.text, features),
-        max_tokens=2048,
-    )
-    p = P.parse_probs(raw)
-    if not p:
-        raise SystemExit("Could not parse the model's answer:\n" + raw)
+    # Single LLM answers vary by ~5-12 points (measured in predict-eval), so the
+    # probabilities shown are the mean of several calls.
+    prompt = P.precedents_prompt(hits, with_notes=by_issue) + P.case_prompt(args.text, features)
+    answers = [
+        P.parse_probs(llm.complete(P.PREDICT_SYSTEM, prompt, max_tokens=2048))
+        for _ in range(max(1, args.repeats))
+    ]
+    answers = [a for a in answers if a]
+    if not answers:
+        raise SystemExit("Could not parse the model's answers — run the command again.")
+    p = P.average_probs([[a] for a in answers])[0]
     memo = None
     for _ in range(2):
         memo = P.parse_memo(
@@ -782,6 +785,7 @@ def main(argv: list[str] | None = None) -> None:
     pr.add_argument("text", nargs="?", help="facts of the dispute, in Polish")
     pr.add_argument("-f", "--file", help="read the facts from a text file instead")
     pr.add_argument("-o", "--out", help="also save the memo as a Markdown file")
+    pr.add_argument("--repeats", type=int, default=3, help="prediction calls to average")
     pr.add_argument("-k", type=int, default=5)
     pr.set_defaults(func=cmd_predict)
 
