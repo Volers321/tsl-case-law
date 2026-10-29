@@ -4,6 +4,7 @@ import pytest
 
 from tsl_case_law import cli
 from tsl_case_law import predict as P
+from tsl_case_law.predict import Example
 
 # Three synthetic dispute patterns with a clear signal in the wording of the facts.
 PATTERNS = {
@@ -229,3 +230,21 @@ def test_cli_predict_reads_facts_from_file(tmp_path, monkeypatch, capsys):
     assert "Symulacja możliwego rozstrzygnięcia" in out and "> I. powództwo oddala" in out
     assert "To nie jest orzeczenie sądu" in out
     assert (tmp_path / "ocena.md").read_text().startswith("# Ocena sprawy")
+
+
+def test_provision_check_flags_errors_from_a_real_memo():
+    # Taken from the first real memo: the 3-year k.c. limitation and art. 750 k.c. were wrong.
+    wrong = "Art. 750 k.c. w związku z art. 1 CMR … art. 118 k.c. – termin przedawnienia, 3 lata"
+    assert P.verify_provision(wrong, []) is False
+    for ok in (
+        "Art. 15 CMR – instrukcje",
+        "art. 16 ust. 1 CMR – koszty",
+        "art. 77 Prawa przewozowego",
+    ):
+        assert P.verify_provision(ok, [])
+    assert P.verify_provision("art. 5 k.c. – nadużycie prawa", []) is False  # not on the list
+    note = Example(
+        1, "V GC 1/15", "2015", "", "", "win", note={"przepisy": ["art. 5 k.c."], "teza": "x"}
+    )
+    assert P.verify_provision("art. 5 k.c. – nadużycie prawa", [(note, 0.3)]), "from precedent"
+    assert "art. 32 Konwencja CMR" in P.provisions_cheatsheet()

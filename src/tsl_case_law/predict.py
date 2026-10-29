@@ -18,6 +18,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import re
 from collections import Counter
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -417,9 +418,124 @@ dla firmy krótką, jasną ocenę sprawy. Dostajesz opis faktów, prognozę szan
     'II. w pozostałym zakresie powództwo oddala', 'III. … koszty procesu …';
     nieznane kwoty i daty jako [nawias kwadratowy]"]
 }
-ZASADY: pisz po polsku, rzeczowo. Powołuj tylko przepisy, których jesteś pewien. Nie wymyślaj
-faktów spoza opisu — braki nazwij w "do_ustalenia". Wyroki o niskim podobieństwie traktuj
-ostrożnie. To ocena szans dla strony sporu, nie wyrok i nie porada prawna."""
+ZASADY: pisz po polsku, rzeczowo. W "przepisy" powołuj WYŁĄCZNIE przepisy z dołączonej
+ŚCIĄGAWKI PRZEPISÓW albo z tez podanych wyroków — i opisuj je zgodnie ze ściągawką. Przy
+przewozie międzynarodowym stosuj CMR (przedawnienie: art. 32 CMR), przy krajowym Prawo
+przewozowe. Nie wymyślaj faktów spoza opisu — braki nazwij w "do_ustalenia". Wyroki o niskim
+podobieństwie traktuj ostrożnie. To ocena szans dla strony sporu, nie wyrok i nie porada prawna."""
+
+# Short, checked descriptions of the provisions that decide most TSL disputes. The memo may
+# cite only these or provisions from the precedents' holdings; anything else is flagged.
+PROVISIONS = {
+    ("CMR", "1"): "zakres: odpłatny międzynarodowy przewóz drogowy towarów",
+    (
+        "CMR",
+        "8",
+    ): "przewoźnik przy przyjęciu sprawdza stan towaru i opakowania; zastrzeżenia wpisuje do listu",
+    (
+        "CMR",
+        "9",
+    ): "list przewozowy dowodem umowy; brak zastrzeżeń = domniemanie dobrego stanu towaru i opakowania",
+    (
+        "CMR",
+        "13",
+    ): "prawa odbiorcy po przybyciu; odbiorca, który odbiera towar, płaci należności z listu",
+    (
+        "CMR",
+        "15",
+    ): "przeszkody w wydaniu (np. odmowa odbioru): przewoźnik żąda instrukcji od nadawcy",
+    (
+        "CMR",
+        "16",
+    ): "zwrot kosztów żądania i wykonania instrukcji, chyba że powstały z winy przewoźnika",
+    (
+        "CMR",
+        "17",
+    ): "odpowiedzialność przewoźnika od przyjęcia do wydania; zwolnienia (ust. 2) i szczególne ryzyka (ust. 4: wadliwe opakowanie, załadunek przez nadawcę)",
+    ("CMR", "18"): "ciężar dowodu; domniemanie przy szczególnych ryzykach z art. 17 ust. 4",
+    ("CMR", "20"): "towar niewydany w terminie — uznanie za zaginiony",
+    (
+        "CMR",
+        "23",
+    ): "wysokość odszkodowania: wartość towaru, limit 8,33 SDR/kg brutto (ust. 3), zwrot przewoźnego (ust. 4)",
+    ("CMR", "24"): "zadeklarowana wartość towaru ponad limit",
+    ("CMR", "25"): "uszkodzenie: odszkodowanie = utrata wartości",
+    ("CMR", "26"): "szczególny interes w dostawie",
+    ("CMR", "27"): "odsetki od odszkodowania",
+    ("CMR", "29"): "wina umyślna lub niedbalstwo jej równoważne: bez ograniczeń odpowiedzialności",
+    (
+        "CMR",
+        "30",
+    ): "zastrzeżenia przy odbiorze; terminy na reklamację szkód niewidocznych i opóźnienia",
+    ("CMR", "32"): "przedawnienie: 1 rok, 3 lata przy winie umyślnej; zawieszenie reklamacją",
+    ("CMR", "34"): "przewoźnicy sukcesywni",
+    ("k.c.", "117"): "przedawnienie — zasady ogólne",
+    ("k.c.", "353^1"): "swoboda umów",
+    ("k.c.", "471"): "odpowiedzialność za niewykonanie lub nienależyte wykonanie zobowiązania",
+    ("k.c.", "481"): "odsetki za opóźnienie",
+    ("k.c.", "483"): "kara umowna",
+    ("k.c.", "484"): "miarkowanie kary umownej",
+    ("k.c.", "498"): "potrącenie — przesłanki",
+    ("k.c.", "499"): "potrącenie — oświadczenie",
+    ("k.c.", "774"): "umowa przewozu",
+    ("k.c.", "778"): "przewoźnik zawodowy — przepisy szczególne",
+    ("k.c.", "788"): "odpowiedzialność przewoźnika za utratę, ubytek lub uszkodzenie",
+    ("k.c.", "792"): "przedawnienie roszczeń z umowy przewozu: 1 rok",
+    ("k.c.", "794"): "umowa spedycji",
+    ("k.c.", "799"): "odpowiedzialność spedytora",
+    ("k.c.", "803"): "przedawnienie roszczeń z umowy spedycji: 1 rok",
+    ("k.c.", "805"): "umowa ubezpieczenia",
+    ("k.c.", "822"): "ubezpieczenie odpowiedzialności cywilnej",
+    (
+        "pr. przew.",
+        "65",
+    ): "odpowiedzialność przewoźnika (przewóz krajowy) za utratę, ubytek, uszkodzenie, opóźnienie",
+    ("pr. przew.", "75"): "reklamacja przed dochodzeniem roszczeń",
+    ("pr. przew.", "77"): "przedawnienie roszczeń z umowy przewozu krajowego: 1 rok",
+}
+
+
+def provisions_cheatsheet() -> str:
+    names = {"CMR": "Konwencja CMR", "k.c.": "Kodeks cywilny", "pr. przew.": "Prawo przewozowe"}
+    return "ŚCIĄGAWKA PRZEPISÓW:\n" + "\n".join(
+        f"- art. {art.replace('^', '')} {names[act]}: {desc}"
+        for (act, art), desc in PROVISIONS.items()
+    )
+
+
+def _act(text: str) -> str | None:
+    t = text.lower()
+    if "cmr" in t or "konwencj" in t:
+        return "CMR"
+    if "przewoz" in t and ("prawa" in t or "prawo" in t or "pr. przew" in t):
+        return "pr. przew."
+    if "k.c" in t or "kodeks" in t or re.search(r"\bkc\b", t):
+        return "k.c."
+    return None
+
+
+def verify_provision(text: str, hits) -> bool:
+    """True when every article cited is in PROVISIONS (same act) or in a precedent's note."""
+    act = _act(text)
+    arts = [a.replace("¹", "^1") for a in re.findall(r"art\.?\s*(\d+(?:¹|\^1)?)", text, re.I)]
+    if not act or not arts:
+        return False
+    from_precedents = " ".join(
+        " ".join(e.note.get("przepisy", [])) for e, _ in hits if e.note
+    ).lower()
+    ok = []
+    for a in arts:
+        if (act, a) in PROVISIONS:
+            ok.append(True)
+            continue
+        plain = a.replace("^1", "")
+        ok.append(
+            bool(re.search(rf"art\.?\s*{plain}\b", from_precedents))
+            and act.split()[0].lower()
+            in from_precedents.replace("konwencji", "cmr").replace("kodeksu cywilnego", "k.c.")
+        )
+    return all(ok)
+
 
 WEAK_SIMILARITY = 0.08
 
@@ -433,7 +549,7 @@ def memo_prompt(text: str, probs: dict, hits) -> str:
         lines.append(f"[{n}] {e.case_number}, wynik: {LABEL_PL[e.label]}{weak}. {e.summary}{teza}")
     return (
         f"OPIS SPRAWY:\n{text.strip()}\n\nPROGNOZA SZANS POWODA: {chances}\n\n"
-        "PODOBNE WYROKI:\n" + "\n".join(lines)
+        "PODOBNE WYROKI:\n" + "\n".join(lines) + "\n\n" + provisions_cheatsheet()
     )
 
 
@@ -473,6 +589,10 @@ def parse_memo(raw: str, n_hits: int) -> dict | None:
 
 def render_memo(memo: dict, probs: dict, hits) -> str:
     """Markdown memo; the same text is printed and can be saved with --out."""
+    memo = dict(memo)
+    memo["przepisy"] = [
+        p if verify_provision(p, hits) else f"{p} ⚠ niezweryfikowany" for p in memo["przepisy"]
+    ]
     out = ["# Ocena sprawy (prognoza, nie porada prawna)", ""]
     out += [f"**Najbardziej prawdopodobny wynik:** {memo['wynik']}", ""]
     out += [

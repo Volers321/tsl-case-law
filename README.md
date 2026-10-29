@@ -148,6 +148,13 @@ Commentaries and glosses in Lex/Legalis are copyrighted; judgments are not. So `
 
 The remaining 5% of provisions are not found verbatim — they may be paraphrased or invented; a manual check of a sample is still to do. The per-note flag (`przepisy_grounded`) lets a UI show unverified provisions differently.
 
+### Testing it on a real dispute
+
+I ran `tsl predict` on a dispute from my own practice (anonymised): a carrier claims freight after a crated shower tray cracked in transit Poland → France, the consignee refused delivery, the shipper ordered the goods back, and the carrier's liability insurer paid out.
+
+- **Retrieval** first returned precedents about cargo theft and duress (similarity 0.05). After summarising the new case in the database's own style before searching, it found **XI GC 1338/15** — a carrier who lost a claim for the *return* journey because he never asked the shipper for instructions (art. 15 CMR). That is the heart of this dispute.
+- **The memo contained two legal errors**: a 3-year limitation period under art. 118 k.c. (wrong — art. 32 CMR, one year) and art. 750 k.c. (not about carriage); it also missed art. 16 CMR (costs of carrying out instructions). The fix: the memo prompt now carries a short, checked cheat-sheet of the CMR / Civil Code / Transport Law provisions that decide most TSL disputes, may cite only those or provisions from the precedents' holdings, and anything else is printed with **⚠ niezweryfikowany**. A regression test is built from the wrong memo.
+
 ## Status
 
 - [x] SAOS client: topical searches, full-judgment download, resumable, retries, polite rate limiting
